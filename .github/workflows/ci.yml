@@ -1,11 +1,15 @@
-# CI for the valkey-glide Rust crate, baselined on upstream valkey-glide's
-# `lint-rust` action + `rust.yml` (fmt / clippy with & without features / doc /
-# feature-check / test / coverage / cargo-deny).
+# CI for the valkey-glide Rust crate.
+#
+# Parity with the upstream valkey-glide test strategy: the `test` job runs as a
+# matrix over **engine version × architecture**, mirroring
+# `valkey-glide/.github/json_matrices/engine-matrix.json` (valkey 8.1/8.0/7.2 +
+# redis 7.2) and `build-matrix.json` (x86_64 + aarch64). Because our integration
+# harness *spawns a local server binary* (via VALKEY_SERVER_PATH), each cell
+# builds the matching engine from source and caches it.
 #
 # The crate links glide-core + its vendored redis-rs via *git* deps pinned to a
-# rev of valkey-io/valkey-glide, so Cargo fetches them automatically — CI needs
-# network access to GitHub (GitHub-hosted runners have it) but no manual checkout
-# of the monorepo. crates.io publishing remains blocked by git deps (README).
+# rev of valkey-io/valkey-glide, so Cargo fetches them automatically (no monorepo
+# checkout). crates.io publishing remains blocked by git deps (see README).
 name: CI
 
 on:
@@ -18,7 +22,7 @@ permissions:
 
 jobs:
     lint:
-        runs-on: ubuntu-latest
+        runs-on: ubuntu-24.04
         steps:
             - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
             - name: Install Rust toolchain
@@ -38,8 +42,8 @@ jobs:
                   RUSTDOCFLAGS: "-D warnings"
               run: cargo doc --no-deps --document-private-items
 
-    test:
-        runs-on: ubuntu-latest
+    build:
+        runs-on: ubuntu-24.04
         steps:
             - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
             - name: Install Rust toolchain
@@ -47,12 +51,7 @@ jobs:
             - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
               with:
                   path: target
-                  key: x86_64-unknown-linux-gnu-test
-            - name: Install a Valkey/Redis server for integration tests
-              run: |
-                  sudo apt-get update
-                  sudo apt-get install -y valkey-server || sudo apt-get install -y redis-server
-                  echo "VALKEY_SERVER_PATH=$(command -v valkey-server || command -v redis-server)" >> "$GITHUB_ENV"
+                  key: x86_64-unknown-linux-gnu-build
             - name: Build (debug)
               run: cargo build --verbose
             - name: Build (release)
@@ -62,11 +61,72 @@ jobs:
                   cargo check --no-default-features
                   cargo check --all-features
                   cargo check --benches --all-features
+
+    test:
+        name: test (${{ matrix.engine.type }} ${{ matrix.engine.version }}, ${{ matrix.arch }})
+        runs-on: ${{ matrix.runner }}
+        # Don't let one engine/arch combination cancel the others.
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    # ---- x86_64 ----
+                    - { runner: ubuntu-24.04, arch: x64, engine: { type: valkey, version: "8.1" } }
+                    - { runner: ubuntu-24.04, arch: x64, engine: { type: valkey, version: "8.0" } }
+                    - { runner: ubuntu-24.04, arch: x64, engine: { type: valkey, version: "7.2" } }
+                    - { runner: ubuntu-24.04, arch: x64, engine: { type: redis, version: "7.2" } }
+                    # ---- aarch64 (GitHub-hosted ARM; requires public repo or paid runners) ----
+                    - { runner: ubuntu-24.04-arm, arch: arm64, engine: { type: valkey, version: "8.1" } }
+                    - { runner: ubuntu-24.04-arm, arch: arm64, engine: { type: valkey, version: "8.0" } }
+                    - { runner: ubuntu-24.04-arm, arch: arm64, engine: { type: valkey, version: "7.2" } }
+                    - { runner: ubuntu-24.04-arm, arch: arm64, engine: { type: redis, version: "7.2" } }
+        steps:
+            - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+            - name: Install Rust toolchain
+              run: rustup toolchain install stable --profile minimal && rustup default stable
+            - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+              with:
+                  path: target
+                  key: ${{ matrix.arch }}-test-${{ matrix.engine.type }}-${{ matrix.engine.version }}
+            - name: Cache ${{ matrix.engine.type }} ${{ matrix.engine.version }} build
+              id: engine-cache
+              uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+              with:
+                  path: ~/engine-install
+                  key: engine-${{ matrix.arch }}-${{ matrix.engine.type }}-${{ matrix.engine.version }}
+            - name: Build ${{ matrix.engine.type }} ${{ matrix.engine.version }} from source
+              if: steps.engine-cache.outputs.cache-hit != 'true'
+              run: |
+                  set -euo pipefail
+                  sudo apt-get update
+                  sudo apt-get install -y build-essential pkg-config libssl-dev tcl
+                  if [ "${{ matrix.engine.type }}" = "valkey" ]; then
+                      REPO="https://github.com/valkey-io/valkey.git"
+                  else
+                      REPO="https://github.com/redis/redis.git"
+                  fi
+                  git clone --depth 1 --branch "${{ matrix.engine.version }}" "$REPO" engine-src
+                  make -C engine-src -j"$(nproc)" BUILD_TLS=yes
+                  mkdir -p "$HOME/engine-install"
+                  cp engine-src/src/*-server engine-src/src/*-cli "$HOME/engine-install/"
+            - name: Register engine on PATH
+              run: |
+                  set -euo pipefail
+                  echo "$HOME/engine-install" >> "$GITHUB_PATH"
+                  if [ -x "$HOME/engine-install/valkey-server" ]; then
+                      echo "VALKEY_SERVER_PATH=$HOME/engine-install/valkey-server" >> "$GITHUB_ENV"
+                  else
+                      echo "VALKEY_SERVER_PATH=$HOME/engine-install/redis-server" >> "$GITHUB_ENV"
+                  fi
+            - name: Server version
+              run: "${VALKEY_SERVER_PATH} --version"
+            - name: Build tests
+              run: cargo test --no-run --verbose
             - name: Test
               run: cargo test --verbose
 
     coverage:
-        runs-on: ubuntu-latest
+        runs-on: ubuntu-24.04
         steps:
             - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
             - name: Install Rust toolchain
@@ -91,7 +151,7 @@ jobs:
                   CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
     deny:
-        runs-on: ubuntu-latest
+        runs-on: ubuntu-24.04
         steps:
             - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
             - name: Install Rust toolchain
