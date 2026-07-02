@@ -20,10 +20,10 @@ jobs:
     lint:
         runs-on: ubuntu-latest
         steps:
-            - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+            - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
             - name: Install Rust toolchain
               run: rustup toolchain install stable --profile minimal --component rustfmt,clippy && rustup default stable
-            - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+            - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
               with:
                   path: target
                   key: x86_64-unknown-linux-gnu-lint
@@ -41,10 +41,10 @@ jobs:
     test:
         runs-on: ubuntu-latest
         steps:
-            - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+            - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
             - name: Install Rust toolchain
               run: rustup toolchain install stable --profile minimal && rustup default stable
-            - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+            - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
               with:
                   path: target
                   key: x86_64-unknown-linux-gnu-test
@@ -68,7 +68,7 @@ jobs:
     coverage:
         runs-on: ubuntu-latest
         steps:
-            - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+            - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
             - name: Install Rust toolchain
               run: rustup toolchain install stable --profile minimal --component llvm-tools-preview && rustup default stable
             - name: Install cargo-llvm-cov
@@ -93,7 +93,7 @@ jobs:
     deny:
         runs-on: ubuntu-latest
         steps:
-            - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+            - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
             - name: Install Rust toolchain
               run: rustup toolchain install stable --profile minimal && rustup default stable
             - name: cargo-deny

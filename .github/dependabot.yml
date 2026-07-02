@@ -9,6 +9,11 @@ updates:
           day: "monday"
           time: "09:00"
       open-pull-requests-limit: 10
+      # criterion 0.6+ carries breaking API/MSRV changes and is only used by the
+      # (dev-only) benches; stay on the working 0.x line and adopt majors manually.
+      ignore:
+          - dependency-name: "criterion"
+            update-types: ["version-update:semver-major"]
       groups:
           patch-updates:
               update-types:

@@ -3342,7 +3342,6 @@ dependencies = [
  "futures",
  "glide-core",
  "once_cell",
- "rand 0.8.6",
  "redis",
  "thiserror 2.0.18",
  "tokio",
