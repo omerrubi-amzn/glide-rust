@@ -28,6 +28,70 @@ GLIDE binding.
 - **Feature parity with the Python GLIDE wrapper** as the baseline for both the
   API surface and the test suite.
 
+## Installation
+
+### Prerequisites
+
+- **Rust 1.85+** (the crate and `glide-core` use edition 2024).
+- **Network access on the first build** — the crate links `glide-core` and its
+  vendored `redis-rs` as pinned **git** dependencies, which Cargo fetches
+  automatically (no monorepo checkout needed; see [Status & publishing](#status--publishing)).
+- A running **Valkey** (or Redis OSS) server to connect to — e.g.
+  `valkey-server` locally, `docker run -p 6379:6379 valkey/valkey`, or an
+  ElastiCache/MemoryDB endpoint.
+
+### 1. Add the dependency
+
+The crate is not yet on crates.io (see [Status & publishing](#status--publishing)),
+so depend on it via git. The package is named `valkey-glide` and the library is
+imported as `glide`:
+
+```toml
+# Cargo.toml
+[dependencies]
+valkey-glide = { git = "https://github.com/omerrubi-amzn/valkey-glide-rust", branch = "main" }
+# Async runtime (the async client is built on Tokio):
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+```
+
+Pin to a specific commit for reproducible builds with `rev = "<sha>"` instead of
+`branch = "main"`.
+
+### 2. Provide the required build-time environment (important)
+
+The vendored `redis-rs` fork reads two variables **at compile time** (via
+`env!`), so *any* crate that builds it — including yours — must define them, or
+the build fails with `environment variable GLIDE_VERSION not defined`. Add a
+`.cargo/config.toml` at your project (or workspace) root:
+
+```toml
+# .cargo/config.toml
+[env]
+GLIDE_NAME = "GlideRust"
+GLIDE_VERSION = "0.1.0"
+# Optional: avoids an aws-lc-rs CPU-jitter-entropy connection-latency regression.
+AWS_LC_SYS_NO_JITTER_ENTROPY = "1"
+```
+
+(These identify the client library/version reported to the server on the
+connection handshake.)
+
+### 3. Build
+
+```bash
+cargo build
+```
+
+The first build fetches and compiles `glide-core` and its dependency tree, so it
+takes a few minutes; subsequent builds are incremental.
+
+### Contributor setup
+
+Cloning this repository to develop the client? See **[DEVELOPER.md](./DEVELOPER.md)**
+for the full workflow (build, run the unit + live integration tests — which spawn
+a `valkey-server`, set `VALKEY_SERVER_PATH` to point at your binary — lint,
+coverage, and benchmarks).
+
 ## Quick start (async)
 
 ```rust,no_run
