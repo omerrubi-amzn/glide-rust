@@ -145,6 +145,33 @@ client.custom_command_with_route(&["PING"], Route::AllPrimaries).await?;
 See `DESIGN.md` and `PLANNING.md` for architecture, and `DEVELOPER.md` for how to
 build, test, and benchmark.
 
+## Testing
+
+The suite has three layers (all run in CI and are currently green):
+
+- **Unit tests (server-free, ~300)** — pure logic with no server: config →
+  `ConnectionRequest` lowering, route → `RoutingInfo` mapping, option/argument
+  encoding, value conversion, and error mapping; plus a **command-family mock
+  suite** that drives every typed command through an in-process executor to
+  assert exact **request encoding** and **response decoding**.
+- **Integration tests (live server, ~415 executions across 22 files)** — real
+  round-trips against a spawned `valkey-server`, one `tests/it_<family>.rs` per
+  command family with edge/error cases (wrong-type, missing key, bounds, expiry
+  conditions), **parametrized over RESP2 and RESP3**, plus suites for batches,
+  scan, pub/sub, auth, TLS, and a **native multi-shard cluster** harness. Each
+  test boots its own ephemeral server and tears it down on drop; suites needing
+  unavailable infra (cluster/TLS/auth) **skip gracefully** rather than fail.
+- **Doctests** — the examples in this README and the API docs are compiled.
+
+```bash
+cargo test --lib     # fast unit + mock tests only (no server needed)
+cargo test           # everything, incl. live integration tests + doctests
+```
+
+Integration tests auto-discover a `valkey-server`/`redis-server` on `PATH`; point
+them at a specific binary with `VALKEY_SERVER_PATH=/path/to/valkey-server`. See
+`DEVELOPER.md` for coverage and benchmarks.
+
 ## Status & publishing
 
 This crate links `glide-core` and its vendored `redis-rs` via **git ("remote")
