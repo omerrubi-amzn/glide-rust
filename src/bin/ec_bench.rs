@@ -81,9 +81,15 @@ async fn measure(
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let host = env::var("GLIDE_HOST").expect("GLIDE_HOST is required");
-    let port: u16 = env::var("GLIDE_PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(6379);
+    let port: u16 = env::var("GLIDE_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(6379);
     let tls_s = env::var("GLIDE_TLS").unwrap_or_else(|_| "off".into());
-    let total: usize = env::var("GLIDE_OPS").ok().and_then(|s| s.parse().ok()).unwrap_or(40_000);
+    let total: usize = env::var("GLIDE_OPS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(40_000);
     let concs: Vec<usize> = env::var("GLIDE_CONC")
         .unwrap_or_else(|_| "1,8,32,128,512".into())
         .split(',')
