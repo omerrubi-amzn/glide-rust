@@ -6,7 +6,7 @@ mod common;
 use glide::commands::sorted_set::{AggregationType, LexBound, ScoreBound};
 use glide::{SortedSetCommands, StringCommands};
 
-resp_test!(zadd_zcard, c, {
+matrix_test!(zadd_zcard, c, {
     let k = common::key("z");
     assert_eq!(
         c.zadd(&k, &[("a", 1.0), ("b", 2.0), ("d", 3.0)])
@@ -19,32 +19,32 @@ resp_test!(zadd_zcard, c, {
     assert_eq!(c.zcard(&k).await.unwrap(), 3);
 });
 
-resp_test!(zcard_missing_zero, c, {
+matrix_test!(zcard_missing_zero, c, {
     assert_eq!(c.zcard(common::key("z")).await.unwrap(), 0);
 });
 
-resp_test!(zadd_incr, c, {
+matrix_test!(zadd_incr, c, {
     let k = common::key("z");
     c.zadd(&k, &[("a", 1.0)]).await.unwrap();
     let v = c.zadd_incr(&k, "a", 4.0).await.unwrap();
     assert_eq!(v, Some(5.0));
 });
 
-resp_test!(zrem, c, {
+matrix_test!(zrem, c, {
     let k = common::key("z");
     c.zadd(&k, &[("a", 1.0), ("b", 2.0)]).await.unwrap();
     assert_eq!(c.zrem(&k, &["a", "missing"]).await.unwrap(), 1);
     assert_eq!(c.zcard(&k).await.unwrap(), 1);
 });
 
-resp_test!(zscore, c, {
+matrix_test!(zscore, c, {
     let k = common::key("z");
     c.zadd(&k, &[("a", 1.5)]).await.unwrap();
     assert_eq!(c.zscore(&k, "a").await.unwrap(), Some(1.5));
     assert_eq!(c.zscore(&k, "missing").await.unwrap(), None);
 });
 
-resp_test!(zmscore, c, {
+matrix_test!(zmscore, c, {
     let k = common::key("z");
     c.zadd(&k, &[("a", 1.0), ("b", 2.0)]).await.unwrap();
     assert_eq!(
@@ -53,7 +53,7 @@ resp_test!(zmscore, c, {
     );
 });
 
-resp_test!(zcount, c, {
+matrix_test!(zcount, c, {
     let k = common::key("z");
     c.zadd(&k, &[("a", 1.0), ("b", 2.0), ("d", 3.0)])
         .await
@@ -82,7 +82,7 @@ resp_test!(zcount, c, {
     );
 });
 
-resp_test!(zlexcount, c, {
+matrix_test!(zlexcount, c, {
     let k = common::key("z");
     c.zadd(&k, &[("a", 0.0), ("b", 0.0), ("d", 0.0)])
         .await
@@ -105,7 +105,7 @@ resp_test!(zlexcount, c, {
     );
 });
 
-resp_test!(zrange_by_index, c, {
+matrix_test!(zrange_by_index, c, {
     let k = common::key("z");
     c.zadd(&k, &[("a", 1.0), ("b", 2.0), ("d", 3.0)])
         .await
@@ -118,7 +118,7 @@ resp_test!(zrange_by_index, c, {
     assert_eq!(rev, vec![&b"d"[..], &b"b"[..], &b"a"[..]]);
 });
 
-resp_test!(zrange_withscores, c, {
+matrix_test!(zrange_withscores, c, {
     let k = common::key("z");
     c.zadd(&k, &[("a", 1.0), ("b", 2.0)]).await.unwrap();
     let ws = c.zrange_withscores(&k, 0, -1, false).await.unwrap();
@@ -128,7 +128,7 @@ resp_test!(zrange_withscores, c, {
     assert_eq!(ws[1].1, 2.0);
 });
 
-resp_test!(zrangebyscore, c, {
+matrix_test!(zrangebyscore, c, {
     let k = common::key("z");
     c.zadd(&k, &[("a", 1.0), ("b", 2.0), ("d", 3.0)])
         .await
@@ -141,7 +141,7 @@ resp_test!(zrangebyscore, c, {
     assert_eq!(r, vec![&b"b"[..], &b"d"[..]]);
 });
 
-resp_test!(zrank_zrevrank, c, {
+matrix_test!(zrank_zrevrank, c, {
     let k = common::key("z");
     c.zadd(&k, &[("a", 1.0), ("b", 2.0), ("d", 3.0)])
         .await
@@ -152,7 +152,7 @@ resp_test!(zrank_zrevrank, c, {
     assert_eq!(c.zrank(&k, "missing").await.unwrap(), None);
 });
 
-resp_test!(zincrby, c, {
+matrix_test!(zincrby, c, {
     let k = common::key("z");
     c.zadd(&k, &[("a", 1.0)]).await.unwrap();
     assert!((c.zincrby(&k, 5.0, "a").await.unwrap() - 6.0).abs() < 1e-9);
@@ -160,7 +160,7 @@ resp_test!(zincrby, c, {
     assert!((c.zincrby(&k, 2.0, "new").await.unwrap() - 2.0).abs() < 1e-9);
 });
 
-resp_test!(zpopmin_zpopmax, c, {
+matrix_test!(zpopmin_zpopmax, c, {
     let k = common::key("z");
     c.zadd(&k, &[("a", 1.0), ("b", 2.0), ("d", 3.0)])
         .await
@@ -173,11 +173,11 @@ resp_test!(zpopmin_zpopmax, c, {
     assert_eq!(max[0].1, 3.0);
 });
 
-resp_test!(zpopmin_empty, c, {
+matrix_test!(zpopmin_empty, c, {
     assert!(c.zpopmin(common::key("z")).await.unwrap().is_empty());
 });
 
-resp_test!(zrandmember, c, {
+matrix_test!(zrandmember, c, {
     let k = common::key("z");
     c.zadd(&k, &[("only", 1.0)]).await.unwrap();
     assert_eq!(
@@ -187,10 +187,10 @@ resp_test!(zrandmember, c, {
     assert_eq!(c.zrandmember(common::key("x")).await.unwrap(), None);
 });
 
-resp_test!(zunionstore, c, {
-    let z1 = common::key("z1");
-    let z2 = common::key("z2");
-    let dst = common::key("dst");
+matrix_test!(zunionstore, c, {
+    let z1 = common::tkey("zs", "z1");
+    let z2 = common::tkey("zs", "z2");
+    let dst = common::tkey("zs", "dst");
     c.zadd(&z1, &[("a", 1.0), ("b", 2.0)]).await.unwrap();
     c.zadd(&z2, &[("b", 10.0), ("d", 3.0)]).await.unwrap();
     assert_eq!(
@@ -202,10 +202,10 @@ resp_test!(zunionstore, c, {
     assert_eq!(c.zscore(&dst, "b").await.unwrap(), Some(10.0));
 });
 
-resp_test!(zinterstore, c, {
-    let z1 = common::key("z1");
-    let z2 = common::key("z2");
-    let dst = common::key("dst");
+matrix_test!(zinterstore, c, {
+    let z1 = common::tkey("zs", "z1");
+    let z2 = common::tkey("zs", "z2");
+    let dst = common::tkey("zs", "dst");
     c.zadd(&z1, &[("a", 1.0), ("b", 2.0)]).await.unwrap();
     c.zadd(&z2, &[("b", 10.0), ("d", 3.0)]).await.unwrap();
     assert_eq!(
@@ -217,7 +217,7 @@ resp_test!(zinterstore, c, {
     assert_eq!(c.zscore(&dst, "b").await.unwrap(), Some(12.0));
 });
 
-resp_test!(zset_wrong_type_errors, c, {
+matrix_test!(zset_wrong_type_errors, c, {
     let k = common::key("wt");
     c.set(&k, "notazset").await.unwrap();
     assert_request_error!(c.zadd(&k, &[("a", 1.0)]).await);

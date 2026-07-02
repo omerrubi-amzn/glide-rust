@@ -6,35 +6,41 @@ mod common;
 use glide::commands::options::{ExpireOptions, Limit, OrderBy};
 use glide::{GenericCommands, ListCommands, StringCommands};
 
-resp_test!(del_and_exists, c, {
-    let a = common::key("a");
-    let b = common::key("b");
+matrix_test!(del_and_exists, c, {
+    let a = common::tkey("g", "a");
+    let b = common::tkey("g", "b");
     c.set(&a, "1").await.unwrap();
     c.set(&b, "2").await.unwrap();
-    assert_eq!(c.exists(&[&a, &b, &common::key("m")]).await.unwrap(), 2);
+    assert_eq!(
+        c.exists(&[&a, &b, &common::tkey("g", "m")]).await.unwrap(),
+        2
+    );
     assert_eq!(c.del(&[&a, &b]).await.unwrap(), 2);
     assert_eq!(c.exists(&[&a]).await.unwrap(), 0);
 });
 
-resp_test!(del_missing_zero, c, {
+matrix_test!(del_missing_zero, c, {
     assert_eq!(c.del(&[common::key("nope")]).await.unwrap(), 0);
 });
 
-resp_test!(unlink, c, {
+matrix_test!(unlink, c, {
     let a = common::key("a");
     c.set(&a, "1").await.unwrap();
     assert_eq!(c.unlink(&[&a]).await.unwrap(), 1);
 });
 
-resp_test!(touch, c, {
-    let a = common::key("a");
-    let b = common::key("b");
+matrix_test!(touch, c, {
+    let a = common::tkey("g", "a");
+    let b = common::tkey("g", "b");
     c.set(&a, "1").await.unwrap();
     c.set(&b, "2").await.unwrap();
-    assert_eq!(c.touch(&[&a, &b, &common::key("m")]).await.unwrap(), 2);
+    assert_eq!(
+        c.touch(&[&a, &b, &common::tkey("g", "m")]).await.unwrap(),
+        2
+    );
 });
 
-resp_test!(expire_and_ttl, c, {
+matrix_test!(expire_and_ttl, c, {
     let k = common::key("k");
     c.set(&k, "v").await.unwrap();
     assert!(c.expire(&k, 100).await.unwrap());
@@ -44,7 +50,7 @@ resp_test!(expire_and_ttl, c, {
     assert_eq!(c.ttl(&k).await.unwrap(), -1);
 });
 
-resp_test!(ttl_missing_and_no_expiry, c, {
+matrix_test!(ttl_missing_and_no_expiry, c, {
     let k = common::key("k");
     // Missing key -> -2.
     assert_eq!(c.ttl(&k).await.unwrap(), -2);
@@ -53,7 +59,7 @@ resp_test!(ttl_missing_and_no_expiry, c, {
     assert_eq!(c.ttl(&k).await.unwrap(), -1);
 });
 
-resp_test!(expire_nx_xx, c, {
+matrix_test!(expire_nx_xx, c, {
     let k = common::key("k");
     c.set(&k, "v").await.unwrap();
     // NX sets only when no expiry exists.
@@ -76,7 +82,7 @@ resp_test!(expire_nx_xx, c, {
     );
 });
 
-resp_test!(expire_gt_lt, c, {
+matrix_test!(expire_gt_lt, c, {
     let k = common::key("k");
     c.set(&k, "v").await.unwrap();
     c.expire(&k, 100).await.unwrap();
@@ -99,14 +105,14 @@ resp_test!(expire_gt_lt, c, {
     );
 });
 
-resp_test!(pexpire_and_pttl, c, {
+matrix_test!(pexpire_and_pttl, c, {
     let k = common::key("k");
     c.set(&k, "v").await.unwrap();
     assert!(c.pexpire(&k, 100_000).await.unwrap());
     assert!(c.pttl(&k).await.unwrap() > 0);
 });
 
-resp_test!(expireat_pexpireat, c, {
+matrix_test!(expireat_pexpireat, c, {
     let k = common::key("k");
     c.set(&k, "v").await.unwrap();
     let future = 4_102_444_800; // year 2100 in seconds
@@ -116,7 +122,7 @@ resp_test!(expireat_pexpireat, c, {
     assert!(c.pexpiretime(&k).await.unwrap() > 0);
 });
 
-resp_test!(key_type, c, {
+matrix_test!(key_type, c, {
     let s = common::key("s");
     let l = common::key("l");
     c.set(&s, "v").await.unwrap();
@@ -126,43 +132,48 @@ resp_test!(key_type, c, {
     assert_eq!(c.key_type(common::key("m")).await.unwrap(), "none");
 });
 
-resp_test!(rename, c, {
-    let k = common::key("k");
-    let n = common::key("n");
+matrix_test!(rename, c, {
+    let k = common::tkey("g", "k");
+    let n = common::tkey("g", "n");
     c.set(&k, "v").await.unwrap();
     c.rename(&k, &n).await.unwrap();
     assert_eq!(c.exists(&[&k]).await.unwrap(), 0);
     assert_eq!(c.get(&n).await.unwrap().as_deref(), Some(&b"v"[..]));
 });
 
-resp_test!(rename_missing_errors, c, {
-    assert_request_error!(c.rename(common::key("nope"), common::key("dst")).await);
+matrix_test!(rename_missing_errors, c, {
+    assert_request_error!(
+        c.rename(common::tkey("g", "nope"), common::tkey("g", "dst"))
+            .await
+    );
 });
 
-resp_test!(renamenx, c, {
-    let k = common::key("k");
-    let n = common::key("n");
+matrix_test!(renamenx, c, {
+    let k = common::tkey("g", "k");
+    let n = common::tkey("g", "n");
     c.set(&k, "v").await.unwrap();
     assert!(c.renamenx(&k, &n).await.unwrap());
     // Now target exists; renaming another key onto it fails.
-    let k2 = common::key("k2");
+    let k2 = common::tkey("g", "k2");
     c.set(&k2, "w").await.unwrap();
     assert!(!c.renamenx(&k2, &n).await.unwrap());
 });
 
+// `randomkey` is routed to a random node in cluster mode, which may not hold our
+// key, so this stays standalone-only (RESP2 + RESP3).
 resp_test!(randomkey_present, c, {
     let k = common::key("k");
     c.set(&k, "v").await.unwrap();
     assert!(c.randomkey().await.unwrap().is_some());
 });
 
-resp_test!(dump_missing_none, c, {
+matrix_test!(dump_missing_none, c, {
     assert_eq!(c.dump(common::key("nope")).await.unwrap(), None);
 });
 
-resp_test!(copy, c, {
-    let src = common::key("src");
-    let dst = common::key("dst");
+matrix_test!(copy, c, {
+    let src = common::tkey("g", "src");
+    let dst = common::tkey("g", "dst");
     c.set(&src, "v").await.unwrap();
     assert!(c.copy(&src, &dst, false).await.unwrap());
     assert_eq!(c.get(&dst).await.unwrap().as_deref(), Some(&b"v"[..]));
@@ -173,7 +184,7 @@ resp_test!(copy, c, {
     assert_eq!(c.get(&dst).await.unwrap().as_deref(), Some(&b"w"[..]));
 });
 
-resp_test!(object_encoding, c, {
+matrix_test!(object_encoding, c, {
     let k = common::key("k");
     c.set(&k, "12345").await.unwrap();
     let enc = c.object_encoding(&k).await.unwrap();
@@ -181,7 +192,7 @@ resp_test!(object_encoding, c, {
     assert_eq!(c.object_encoding(common::key("nope")).await.unwrap(), None);
 });
 
-resp_test!(sort_numeric, c, {
+matrix_test!(sort_numeric, c, {
     let k = common::key("l");
     c.rpush(&k, &["3", "1", "2"]).await.unwrap();
     let asc = c.sort(&k, Some(OrderBy::Asc), None, false).await.unwrap();
@@ -189,7 +200,7 @@ resp_test!(sort_numeric, c, {
     assert_eq!(asc, vec![&b"1"[..], &b"2"[..], &b"3"[..]]);
 });
 
-resp_test!(sort_with_limit, c, {
+matrix_test!(sort_with_limit, c, {
     let k = common::key("l");
     c.rpush(&k, &["5", "4", "3", "2", "1"]).await.unwrap();
     let limited = c
@@ -208,7 +219,7 @@ resp_test!(sort_with_limit, c, {
     assert_eq!(limited, vec![&b"2"[..], &b"3"[..]]);
 });
 
-resp_test!(sort_alpha, c, {
+matrix_test!(sort_alpha, c, {
     let k = common::key("l");
     c.rpush(&k, &["banana", "apple", "cherry"]).await.unwrap();
     let sorted = c.sort(&k, Some(OrderBy::Asc), None, true).await.unwrap();

@@ -5,7 +5,7 @@ mod common;
 
 use glide::{StreamCommands, StringCommands};
 
-resp_test!(xadd_xlen, c, {
+matrix_test!(xadd_xlen, c, {
     let k = common::key("stream");
     let id = c.xadd(&k, "*", &[("field", "value")]).await.unwrap();
     assert!(id.is_some());
@@ -14,17 +14,17 @@ resp_test!(xadd_xlen, c, {
     assert_eq!(c.xlen(&k).await.unwrap(), 2);
 });
 
-resp_test!(xlen_missing_zero, c, {
+matrix_test!(xlen_missing_zero, c, {
     assert_eq!(c.xlen(common::key("stream")).await.unwrap(), 0);
 });
 
-resp_test!(xadd_explicit_id, c, {
+matrix_test!(xadd_explicit_id, c, {
     let k = common::key("stream");
     let id = c.xadd(&k, "1-1", &[("f", "v")]).await.unwrap();
     assert_eq!(id.as_deref(), Some("1-1"));
 });
 
-resp_test!(xrange, c, {
+matrix_test!(xrange, c, {
     let k = common::key("stream");
     c.xadd(&k, "1-1", &[("field", "value")]).await.unwrap();
     let entries = c.xrange(&k, "-", "+").await.unwrap();
@@ -34,7 +34,7 @@ resp_test!(xrange, c, {
     assert_eq!(entries[0].1[0].1.as_ref(), b"value");
 });
 
-resp_test!(xrange_empty, c, {
+matrix_test!(xrange_empty, c, {
     assert!(
         c.xrange(common::key("stream"), "-", "+")
             .await
@@ -43,7 +43,7 @@ resp_test!(xrange_empty, c, {
     );
 });
 
-resp_test!(xrevrange, c, {
+matrix_test!(xrevrange, c, {
     let k = common::key("stream");
     c.xadd(&k, "1-1", &[("a", "1")]).await.unwrap();
     c.xadd(&k, "2-1", &[("b", "2")]).await.unwrap();
@@ -53,7 +53,7 @@ resp_test!(xrevrange, c, {
     assert_eq!(entries[0].0, "2-1");
 });
 
-resp_test!(xdel, c, {
+matrix_test!(xdel, c, {
     let k = common::key("stream");
     c.xadd(&k, "1-1", &[("a", "1")]).await.unwrap();
     c.xadd(&k, "2-1", &[("b", "2")]).await.unwrap();
@@ -61,7 +61,7 @@ resp_test!(xdel, c, {
     assert_eq!(c.xlen(&k).await.unwrap(), 1);
 });
 
-resp_test!(xtrim_maxlen, c, {
+matrix_test!(xtrim_maxlen, c, {
     let k = common::key("stream");
     for i in 1..=5 {
         c.xadd(&k, &format!("{i}-1"), &[("f", "v")]).await.unwrap();
@@ -71,7 +71,7 @@ resp_test!(xtrim_maxlen, c, {
     assert_eq!(c.xlen(&k).await.unwrap(), 2);
 });
 
-resp_test!(xgroup_create_destroy, c, {
+matrix_test!(xgroup_create_destroy, c, {
     let k = common::key("stream");
     c.xadd(&k, "1-1", &[("f", "v")]).await.unwrap();
     c.xgroup_create(&k, "grp", "0", false).await.unwrap();
@@ -80,14 +80,14 @@ resp_test!(xgroup_create_destroy, c, {
     assert!(!c.xgroup_destroy(&k, "nope").await.unwrap());
 });
 
-resp_test!(xgroup_create_mkstream, c, {
+matrix_test!(xgroup_create_mkstream, c, {
     let k = common::key("stream");
     // MKSTREAM creates the stream if absent.
     c.xgroup_create(&k, "grp", "0", true).await.unwrap();
     assert_eq!(c.xlen(&k).await.unwrap(), 0);
 });
 
-resp_test!(xack, c, {
+matrix_test!(xack, c, {
     let k = common::key("stream");
     c.xadd(&k, "1-1", &[("f", "v")]).await.unwrap();
     c.xgroup_create(&k, "grp", "0", false).await.unwrap();
@@ -95,7 +95,7 @@ resp_test!(xack, c, {
     assert_eq!(c.xack(&k, "grp", &["1-1"]).await.unwrap(), 0);
 });
 
-resp_test!(stream_wrong_type_errors, c, {
+matrix_test!(stream_wrong_type_errors, c, {
     let k = common::key("wt");
     c.set(&k, "notastream").await.unwrap();
     assert_request_error!(c.xlen(&k).await);

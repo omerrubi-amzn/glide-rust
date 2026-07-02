@@ -143,3 +143,125 @@ async fn watch_multi_semantics() {
     let unwatch = c.custom_command(&["UNWATCH"]).await.unwrap();
     assert_eq!(glide::value::to_string(unwatch).unwrap(), "OK");
 }
+
+#[tokio::test]
+async fn batch_spans_multiple_data_types() {
+    let srv = server_or_skip!();
+    let c = srv.client().await;
+    let s = common::key("b_str");
+    let l = common::key("b_list");
+    let h = common::key("b_hash");
+    let z = common::key("b_zset");
+
+    let mut batch = Batch::new(false);
+    batch
+        .command(&["SET", &s, "v"])
+        .command(&["RPUSH", &l, "a", "b", "c"])
+        .command(&["HSET", &h, "f", "1"])
+        .command(&["ZADD", &z, "1", "m"])
+        .command(&["LLEN", &l])
+        .command(&["HGET", &h, "f"])
+        .command(&["ZCARD", &z]);
+    let r = c.exec(&batch, true).await.unwrap();
+    assert_eq!(r.len(), 7);
+    assert_eq!(glide::value::to_i64(r[4].clone()).unwrap(), 3); // LLEN
+    assert_eq!(glide::value::to_string(r[5].clone()).unwrap(), "1"); // HGET
+    assert_eq!(glide::value::to_i64(r[6].clone()).unwrap(), 1); // ZCARD
+}
+
+#[tokio::test]
+async fn batch_preserves_binary_values() {
+    let srv = server_or_skip!();
+    let c = srv.client().await;
+    let k = common::key("b_bin");
+    let payload = vec![0u8, 1, 2, 255, 0, 42];
+    let mut batch = Batch::new(true);
+    batch.set(&k, payload.clone()).get(&k);
+    let r = c.exec(&batch, true).await.unwrap();
+    assert_eq!(
+        glide::value::to_bytes(r[1].clone()).unwrap().as_ref(),
+        &payload[..]
+    );
+}
+
+#[tokio::test]
+async fn non_atomic_mixed_reads_writes_ordered() {
+    let srv = server_or_skip!();
+    let c = srv.client().await;
+    let k = common::key("b_mix");
+    let mut batch = Batch::new(false);
+    batch
+        .set(&k, "1")
+        .get(&k)
+        .incr(&k)
+        .get(&k)
+        .del(&[&k])
+        .get(&k);
+    let r = c.exec(&batch, true).await.unwrap();
+    assert_eq!(r.len(), 6);
+    assert_eq!(glide::value::to_string(r[1].clone()).unwrap(), "1");
+    assert_eq!(glide::value::to_i64(r[2].clone()).unwrap(), 2);
+    assert_eq!(glide::value::to_string(r[3].clone()).unwrap(), "2");
+    // After DEL, GET is null.
+    assert!(matches!(r[5], glide::Value::Nil));
+}
+
+#[tokio::test]
+async fn cluster_atomic_transaction_same_slot() {
+    let h = match common::shared_cluster() {
+        Some(h) => h,
+        None => {
+            eprintln!("SKIP: cluster harness not feasible");
+            return;
+        }
+    };
+    let c = match h.client().await {
+        Some(c) => c,
+        None => {
+            eprintln!("SKIP: cluster connect failed");
+            return;
+        }
+    };
+    // All keys share a hash tag → same slot → a cluster MULTI/EXEC is valid.
+    let k1 = common::tkey("btx", "k1");
+    let k2 = common::tkey("btx", "k2");
+    let mut batch = Batch::new(true);
+    batch
+        .set(&k1, "10")
+        .incr(&k1)
+        .set(&k2, "x")
+        .get(&k1)
+        .get(&k2);
+    let r = c.exec(&batch, true, None).await.unwrap();
+    assert_eq!(r.len(), 5);
+    assert_eq!(glide::value::to_i64(r[1].clone()).unwrap(), 11);
+    assert_eq!(glide::value::to_string(r[3].clone()).unwrap(), "11");
+    assert_eq!(glide::value::to_string(r[4].clone()).unwrap(), "x");
+}
+
+#[tokio::test]
+async fn cluster_non_atomic_pipeline() {
+    let h = match common::shared_cluster() {
+        Some(h) => h,
+        None => {
+            eprintln!("SKIP: cluster harness not feasible");
+            return;
+        }
+    };
+    let c = match h.client().await {
+        Some(c) => c,
+        None => {
+            eprintln!("SKIP: cluster connect failed");
+            return;
+        }
+    };
+    // A non-atomic pipeline may span slots; GLIDE routes each command.
+    let mut batch = Batch::new(false);
+    let a = common::key("bp_a");
+    let b = common::key("bp_b");
+    batch.set(&a, "1").set(&b, "2").get(&a).get(&b);
+    let r = c.exec(&batch, true, None).await.unwrap();
+    assert_eq!(r.len(), 4);
+    assert_eq!(glide::value::to_string(r[2].clone()).unwrap(), "1");
+    assert_eq!(glide::value::to_string(r[3].clone()).unwrap(), "2");
+}

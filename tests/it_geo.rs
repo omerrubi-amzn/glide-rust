@@ -19,7 +19,7 @@ fn catania() -> GeospatialData {
     }
 }
 
-resp_test!(geoadd, c, {
+matrix_test!(geoadd, c, {
     let k = common::key("geo");
     let added = c
         .geoadd(&k, &[("Palermo", palermo()), ("Catania", catania())])
@@ -30,7 +30,7 @@ resp_test!(geoadd, c, {
     assert_eq!(c.geoadd(&k, &[("Palermo", palermo())]).await.unwrap(), 0);
 });
 
-resp_test!(geodist_km, c, {
+matrix_test!(geodist_km, c, {
     let k = common::key("geo");
     c.geoadd(&k, &[("Palermo", palermo()), ("Catania", catania())])
         .await
@@ -44,7 +44,7 @@ resp_test!(geodist_km, c, {
     assert!(d > 160.0 && d < 170.0);
 });
 
-resp_test!(geodist_missing_member_none, c, {
+matrix_test!(geodist_missing_member_none, c, {
     let k = common::key("geo");
     c.geoadd(&k, &[("Palermo", palermo())]).await.unwrap();
     assert_eq!(
@@ -53,7 +53,7 @@ resp_test!(geodist_missing_member_none, c, {
     );
 });
 
-resp_test!(geohash, c, {
+matrix_test!(geohash, c, {
     let k = common::key("geo");
     c.geoadd(&k, &[("Palermo", palermo())]).await.unwrap();
     let hashes = c.geohash(&k, &["Palermo", "Missing"]).await.unwrap();
@@ -61,7 +61,7 @@ resp_test!(geohash, c, {
     assert!(hashes[1].is_none());
 });
 
-resp_test!(geopos, c, {
+matrix_test!(geopos, c, {
     let k = common::key("geo");
     c.geoadd(&k, &[("Palermo", palermo())]).await.unwrap();
     let positions = c.geopos(&k, &["Palermo", "Missing"]).await.unwrap();
@@ -71,7 +71,7 @@ resp_test!(geopos, c, {
     assert!(positions[1].is_none());
 });
 
-resp_test!(geosearch_by_radius, c, {
+matrix_test!(geosearch_by_radius, c, {
     let k = common::key("geo");
     c.geoadd(&k, &[("Palermo", palermo()), ("Catania", catania())])
         .await
@@ -88,7 +88,7 @@ resp_test!(geosearch_by_radius, c, {
     assert_eq!(narrow.len(), 1);
 });
 
-resp_test!(geo_wrong_type_errors, c, {
+matrix_test!(geo_wrong_type_errors, c, {
     let k = common::key("wt");
     c.set(&k, "notgeo").await.unwrap();
     assert_request_error!(c.geoadd(&k, &[("X", palermo())]).await);

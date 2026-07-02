@@ -27,8 +27,57 @@ use glide::{
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+
+/// Kill leaked shared-cluster child processes at test-process exit.
+///
+/// The shared cluster is owned by a `static` (see [`shared_cluster`]) whose
+/// `Drop` never runs, so we register each cluster node's PID and install a single
+/// `atexit` reaper (Linux). `PR_SET_PDEATHSIG` is unsuitable here because it fires
+/// when the *spawning thread* exits — which for a shared, cross-test cluster is
+/// the first test's thread, not the process.
+#[cfg(target_os = "linux")]
+mod cluster_reaper {
+    use std::sync::{Mutex, Once};
+
+    static PIDS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+    static REGISTERED: Once = Once::new();
+
+    /// Record a child PID and ensure the `atexit` reaper is installed once.
+    pub fn register(pid: u32) {
+        if let Ok(mut pids) = PIDS.lock() {
+            pids.push(pid);
+        }
+        REGISTERED.call_once(|| {
+            // SAFETY: registering a plain `extern "C"` fn with libc atexit.
+            unsafe {
+                libc::atexit(reap);
+            }
+        });
+    }
+
+    extern "C" fn reap() {
+        if let Ok(pids) = PIDS.lock() {
+            for &pid in pids.iter() {
+                // SAFETY: best-effort SIGKILL of a process we spawned.
+                unsafe {
+                    libc::kill(pid as libc::pid_t, libc::SIGKILL);
+                }
+            }
+        }
+    }
+}
+
+/// Register a shared-cluster child PID for cleanup at process exit (no-op off
+/// Linux, where the `static` owner simply leaks the processes).
+fn reap_on_exit(pid: u32) {
+    #[cfg(target_os = "linux")]
+    cluster_reaper::register(pid);
+    #[cfg(not(target_os = "linux"))]
+    let _ = pid;
+}
 
 /// Locate a usable `valkey-server`/`redis-server` binary. Set the
 /// `VALKEY_SERVER_PATH` environment variable to point at a specific binary;
@@ -69,6 +118,69 @@ pub fn key(prefix: &str) -> String {
         .unwrap()
         .as_nanos();
     format!("{prefix}:{t}:{n}")
+}
+
+/// A process-unique key wrapped in a Valkey **hash tag** so that all keys sharing
+/// the same `tag` map to the same cluster slot. Required for multi-key commands
+/// (MSET/MGET, RENAME, SINTERSTORE, …) to be valid in cluster mode; harmless in
+/// standalone (the braces are just part of the key name). Example:
+/// `tkey("grp", "a")` -> `{grp}:a:<ts>:<n>`.
+pub fn tkey(tag: &str, name: &str) -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    format!("{{{tag}}}:{name}:{t}:{n}")
+}
+
+/// Parse a `"major.minor.patch"` version string into a tuple.
+fn parse_version(s: &str) -> Option<(u32, u32, u32)> {
+    let mut it = s.trim().split('.');
+    let major = it.next()?.parse().ok()?;
+    let minor = it.next().unwrap_or("0").parse().unwrap_or(0);
+    // patch may carry a suffix (e.g. "3-rc1"); take leading digits only.
+    let patch = it
+        .next()
+        .unwrap_or("0")
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse()
+        .unwrap_or(0);
+    Some((major, minor, patch))
+}
+
+/// Query the connected server's version via `INFO server` (works on standalone
+/// and cluster clients). Reads `valkey_version:` or `redis_version:`.
+pub async fn server_version<C>(c: &C) -> Option<(u32, u32, u32)>
+where
+    C: glide::ServerManagementCommands + Sync,
+{
+    let bytes = c.info_sections(&["server"]).await.ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    for line in text.lines() {
+        let line = line.trim();
+        for key in ["valkey_version:", "redis_version:"] {
+            if let Some(v) = line.strip_prefix(key) {
+                return parse_version(v);
+            }
+        }
+    }
+    None
+}
+
+/// True when the server version is strictly below `min`. Returns `false` if the
+/// version cannot be determined (fail-open: run the test rather than skip).
+pub async fn version_below<C>(c: &C, min: (u32, u32, u32)) -> bool
+where
+    C: glide::ServerManagementCommands + Sync,
+{
+    match server_version(c).await {
+        Some(v) => v < min,
+        None => false,
+    }
 }
 
 /// Block until `port` accepts a TCP connection, or `deadline` elapses.
@@ -183,12 +295,39 @@ fn raw_cmd(stream: &mut TcpStream, args: &[&str]) -> std::io::Result<String> {
     Ok(String::from_utf8_lossy(&resp[..n]).into_owned())
 }
 
-/// A running multi-node cluster; all nodes are killed and temp state removed on
-/// drop.
+/// Extract the first unsigned integer value for `"field"` in a JSON fragment,
+/// e.g. `field_u64(r#""port": 6379,"#, "\"port\"") == Some(6379)`. A tiny
+/// dependency-free parser sufficient for cluster_manager.py's `SERVERS_JSON`.
+fn field_u64(fragment: &str, field: &str) -> Option<u64> {
+    let idx = fragment.find(field)?;
+    let after = &fragment[idx + field.len()..];
+    let digits: String = after
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse().ok()
+}
+
+/// Two backends:
+/// * **cluster_manager.py** (preferred, opt-in): when the `GLIDE_CLUSTER_MANAGER`
+///   env var points at the canonical `valkey-glide/utils/cluster_manager.py`,
+///   the cluster is created with that tool — matching the Python suite and
+///   yielding **replicas** (and, in future, TLS). Requires `valkey-cli` on PATH.
+/// * **native** (fallback, self-contained): builds a primaries-only cluster
+///   directly from `valkey-server` via `CLUSTER ADDSLOTSRANGE` + `MEET`, so the
+///   standalone repo needs no external tooling.
 pub struct ClusterHarness {
     children: Vec<Child>,
     pub ports: Vec<u16>,
     dir: std::path::PathBuf,
+    /// When `Some`, the cluster was created by cluster_manager.py; the value is
+    /// the `--cluster-folder` used to stop it.
+    managed_folder: Option<String>,
+    /// Primary node ports (the seed is `ports[0]`, always a primary).
+    pub primary_ports: Vec<u16>,
+    /// Replica node ports (empty for the native backend).
+    pub replica_ports: Vec<u16>,
 }
 
 impl ClusterHarness {
@@ -199,8 +338,110 @@ impl ClusterHarness {
         Self::start_shards(3)
     }
 
-    /// Start a cluster with `shards` primaries.
+    /// Start a cluster with `shards` primaries. Tries cluster_manager.py first
+    /// (adds replicas), then the native primaries-only backend.
     pub fn start_shards(shards: usize) -> Option<ClusterHarness> {
+        if let Some(h) = Self::start_via_cluster_manager(shards, 1) {
+            return Some(h);
+        }
+        Self::start_native(shards)
+    }
+
+    /// Preferred backend: shell out to the canonical `cluster_manager.py`
+    /// (pointed to by `GLIDE_CLUSTER_MANAGER`). Returns `None` if the env var is
+    /// unset/invalid or the tool fails, so the caller falls back to native.
+    fn start_via_cluster_manager(shards: usize, replicas: usize) -> Option<ClusterHarness> {
+        let script = std::env::var("GLIDE_CLUSTER_MANAGER").ok()?;
+        if !std::path::Path::new(&script).exists() {
+            return None;
+        }
+        let out = Command::new("python3")
+            .args([
+                &script,
+                "start",
+                "--cluster-mode",
+                "-n",
+                &shards.to_string(),
+                "-r",
+                &replicas.to_string(),
+            ])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let stdout = String::from_utf8_lossy(&out.stdout);
+
+        let mut folder: Option<String> = None;
+        let mut nodes: Vec<(String, u16)> = Vec::new();
+        for line in stdout.lines() {
+            if let Some(rest) = line.strip_prefix("CLUSTER_FOLDER=") {
+                folder = Some(rest.trim().to_string());
+            } else if let Some(rest) = line.strip_prefix("CLUSTER_NODES=") {
+                for addr in rest.trim().split(',') {
+                    if let Some((h, p)) = addr.rsplit_once(':')
+                        && let Ok(port) = p.parse::<u16>()
+                    {
+                        nodes.push((h.to_string(), port));
+                    }
+                }
+            }
+        }
+        let folder = folder?;
+        if nodes.is_empty() {
+            return None;
+        }
+
+        // Parse SERVERS_JSON for pids (cleanup) and primary/replica split.
+        let mut pids: Vec<u32> = Vec::new();
+        let mut primary_ports: Vec<u16> = Vec::new();
+        let mut replica_ports: Vec<u16> = Vec::new();
+        if let Some(json_line) = stdout.lines().find(|l| l.starts_with("SERVERS_JSON=")) {
+            let json = &json_line["SERVERS_JSON=".len()..];
+            for obj in json.split('{').skip(1) {
+                let port = field_u64(obj, "\"port\"").map(|v| v as u16);
+                let pid = field_u64(obj, "\"pid\"").map(|v| v as u32);
+                let is_primary = obj
+                    .split_once("\"is_primary\"")
+                    .map(|(_, r)| r.contains("true"))
+                    .unwrap_or(false);
+                if let Some(pid) = pid {
+                    pids.push(pid);
+                }
+                if let Some(port) = port {
+                    if is_primary {
+                        primary_ports.push(port);
+                    } else {
+                        replica_ports.push(port);
+                    }
+                }
+            }
+        }
+        for pid in &pids {
+            reap_on_exit(*pid);
+        }
+
+        // Seed on a primary if we identified one, else the first node.
+        let seed = *primary_ports.first().unwrap_or(&nodes[0].1);
+        let mut ports: Vec<u16> = vec![seed];
+        ports.extend(nodes.iter().map(|(_, p)| *p).filter(|p| *p != seed));
+        if primary_ports.is_empty() {
+            primary_ports = nodes.iter().map(|(_, p)| *p).collect();
+        }
+
+        Some(ClusterHarness {
+            children: Vec::new(),
+            ports,
+            dir: std::path::PathBuf::from(&folder),
+            managed_folder: Some(folder),
+            primary_ports,
+            replica_ports,
+        })
+    }
+
+    /// Native fallback: build a `shards`-primary cluster directly from
+    /// `valkey-server`.
+    fn start_native(shards: usize) -> Option<ClusterHarness> {
         let bin = server_binary()?;
         let dir = std::env::temp_dir().join(key("vgr_cluster"));
         std::fs::create_dir_all(&dir).ok()?;
@@ -213,7 +454,8 @@ impl ClusterHarness {
                 break;
             }
             let conf = format!("nodes-{port}.conf");
-            match Command::new(&bin)
+            let mut command = Command::new(&bin);
+            command
                 .args([
                     "--port",
                     &port.to_string(),
@@ -233,10 +475,14 @@ impl ClusterHarness {
                     "no",
                 ])
                 .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-            {
-                Ok(c) => children.push(c),
+                .stderr(Stdio::null());
+            match command.spawn() {
+                Ok(c) => {
+                    // The shared cluster's `static` owner never runs Drop; ensure
+                    // the node is killed at test-process exit.
+                    reap_on_exit(c.id());
+                    children.push(c);
+                }
                 Err(_) => break,
             }
         }
@@ -245,6 +491,9 @@ impl ClusterHarness {
             children,
             ports: ports.clone(),
             dir,
+            managed_folder: None,
+            primary_ports: ports.clone(),
+            replica_ports: Vec::new(),
         };
 
         // All nodes must be up.
@@ -343,6 +592,18 @@ impl ClusterHarness {
 
 impl Drop for ClusterHarness {
     fn drop(&mut self) {
+        if let Some(folder) = &self.managed_folder {
+            // Managed backend: stop via cluster_manager.py (best effort). The
+            // atexit reaper also has the pids as a backstop.
+            if let Ok(script) = std::env::var("GLIDE_CLUSTER_MANAGER") {
+                let _ = Command::new("python3")
+                    .args([&script, "stop", "--cluster-folder", folder])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+            }
+            return;
+        }
         for child in &mut self.children {
             let _ = child.kill();
             let _ = child.wait();
@@ -352,8 +613,32 @@ impl Drop for ClusterHarness {
 }
 
 // ---------------------------------------------------------------------------
-// Macros
+// Shared cluster (one per test binary, like Python's session-scoped fixture)
 // ---------------------------------------------------------------------------
+
+/// A lazily-started cluster shared across all tests in the *current test binary*.
+///
+/// Starting a cluster costs several seconds, so the `matrix_test!` cluster arms
+/// reuse a single instance (mirroring Python's session-scoped `valkey_cluster`
+/// fixture). Test isolation relies on unique keys ([`key`]/[`tkey`]), not
+/// `FLUSHALL`, so the shared cluster is never mutated globally. Child processes
+/// are killed on test-process exit via an `atexit` reaper (see [`reap_on_exit`]),
+/// so the leaked `static` owner does not leave servers running.
+///
+/// Returns `None` (tests SKIP) when a cluster cannot be formed in this
+/// environment.
+pub fn shared_cluster() -> Option<&'static ClusterHarness> {
+    static CLUSTER: OnceLock<Option<ClusterHarness>> = OnceLock::new();
+    // The shared cluster is owned by a `static` whose `Drop` never runs, so it
+    // MUST use the native backend: its child PIDs are direct children we spawn,
+    // which the `atexit` reaper kills reliably. (cluster_manager.py's reported
+    // PIDs can indirect through a launcher, leaking servers with no Drop to run
+    // `stop`.) Tests needing replicas create their own managed `ClusterHarness`,
+    // which is cleaned up by its `Drop`.
+    CLUSTER
+        .get_or_init(|| ClusterHarness::start_native(3))
+        .as_ref()
+}
 
 /// Start a standalone server, or `return` from the test (printing SKIP) when no
 /// server binary is available.
@@ -420,6 +705,120 @@ macro_rules! resp_test {
             }
         }
     };
+}
+
+/// Expand one test body into **four** `#[tokio::test]`s: the cartesian product of
+/// {standalone, cluster} × {RESP2, RESP3} — mirroring Python's
+/// `cluster_mode × protocol` parametrization (the ~4× multiplier).
+///
+/// * standalone arms get a fresh [`TestServer`] each (cheap, fully isolated);
+/// * cluster arms share the per-binary [`shared_cluster`] and SKIP if a cluster
+///   cannot be formed.
+///
+/// The body must be **cluster-safe**: use [`common::key`] for single-key work and
+/// [`common::tkey`] (hash-tagged) so multi-key commands land in one slot. The
+/// same body compiles against both client types because every typed command
+/// method is implemented for both `GlideClient` and `GlideClusterClient`.
+///
+/// ```ignore
+/// matrix_test!(set_and_get, c, {
+///     let k = common::key("str");
+///     c.set(&k, "v").await.unwrap();
+///     assert_eq!(c.get(&k).await.unwrap().as_deref(), Some(&b"v"[..]));
+/// });
+/// ```
+#[macro_export]
+macro_rules! matrix_test {
+    ($name:ident, $c:ident, $body:block) => {
+        mod $name {
+            use super::*;
+            #[allow(unused_imports)]
+            use $crate::common;
+
+            #[tokio::test]
+            async fn standalone_resp2() {
+                let __srv = $crate::server_or_skip!();
+                let $c = __srv
+                    .client_with_protocol(glide::ProtocolVersion::RESP2)
+                    .await;
+                $body
+            }
+
+            #[tokio::test]
+            async fn standalone_resp3() {
+                let __srv = $crate::server_or_skip!();
+                let $c = __srv
+                    .client_with_protocol(glide::ProtocolVersion::RESP3)
+                    .await;
+                $body
+            }
+
+            #[tokio::test]
+            async fn cluster_resp2() {
+                let __h = match $crate::common::shared_cluster() {
+                    Some(h) => h,
+                    None => {
+                        eprintln!("SKIP: cluster harness not feasible in this environment");
+                        return;
+                    }
+                };
+                let $c = match __h
+                    .client_with_protocol(glide::ProtocolVersion::RESP2)
+                    .await
+                {
+                    Some(c) => c,
+                    None => {
+                        eprintln!("SKIP: could not connect cluster client (RESP2)");
+                        return;
+                    }
+                };
+                $body
+            }
+
+            #[tokio::test]
+            async fn cluster_resp3() {
+                let __h = match $crate::common::shared_cluster() {
+                    Some(h) => h,
+                    None => {
+                        eprintln!("SKIP: cluster harness not feasible in this environment");
+                        return;
+                    }
+                };
+                let $c = match __h
+                    .client_with_protocol(glide::ProtocolVersion::RESP3)
+                    .await
+                {
+                    Some(c) => c,
+                    None => {
+                        eprintln!("SKIP: could not connect cluster client (RESP3)");
+                        return;
+                    }
+                };
+                $body
+            }
+        }
+    };
+}
+
+/// Skip the current test (printing SKIP) when the server version is below
+/// `major.minor.patch` — the Rust analogue of Python's
+/// `@pytest.mark.skip_if_version_below`. Requires a connected client `$c` that
+/// implements `ServerManagementCommands`.
+///
+/// ```ignore
+/// matrix_test!(hexpire_sets_ttl, c, {
+///     skip_if_version_below!(c, 7, 4, 0);
+///     // ... newer-command assertions ...
+/// });
+/// ```
+#[macro_export]
+macro_rules! skip_if_version_below {
+    ($c:expr, $major:expr, $minor:expr, $patch:expr) => {{
+        if $crate::common::version_below(&$c, ($major, $minor, $patch)).await {
+            eprintln!("SKIP: requires server >= {}.{}.{}", $major, $minor, $patch);
+            return;
+        }
+    }};
 }
 
 /// Assert that an expression evaluated to `Err(GlideError::Request(_))` — the
