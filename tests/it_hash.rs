@@ -152,11 +152,14 @@ matrix_test!(hset_wrong_type_errors, c, {
 
 // ---------------------------------------------------------------------------
 // Hash-field TTL (Valkey/Redis 7.4+). Version-gated so CI against older servers
-// skips gracefully — mirrors Python's @skip_if_version_below("7.4.0").
+// Hash-field TTL (Valkey/Redis 7.4+). Gated on the server actually supporting
+// HEXPIRE (via COMMAND INFO) rather than a version number, because Valkey pins
+// its advertised redis_version to 7.2.4 on all releases — mirrors the intent of
+// Python's @skip_if_version_below("7.4.0") but is robust across Redis/Valkey.
 // ---------------------------------------------------------------------------
 
 matrix_test!(hexpire_and_httl, c, {
-    skip_if_version_below!(c, 7, 4, 0);
+    skip_unless_command!(c, "HEXPIRE");
     let k = common::key("h_ttl");
     c.hset(&k, &[("f1", "v1"), ("f2", "v2")]).await.unwrap();
     // Set a 100s TTL on f1 only.
@@ -170,7 +173,7 @@ matrix_test!(hexpire_and_httl, c, {
 });
 
 matrix_test!(hexpire_conditions, c, {
-    skip_if_version_below!(c, 7, 4, 0);
+    skip_unless_command!(c, "HEXPIRE");
     let k = common::key("h_ttlc");
     c.hset(&k, &[("f", "v")]).await.unwrap();
     // NX: set only when no TTL exists -> succeeds.
@@ -197,7 +200,7 @@ matrix_test!(hexpire_conditions, c, {
 });
 
 matrix_test!(hpexpire_and_hpttl, c, {
-    skip_if_version_below!(c, 7, 4, 0);
+    skip_unless_command!(c, "HEXPIRE");
     let k = common::key("h_pttl");
     c.hset(&k, &[("f", "v")]).await.unwrap();
     assert_eq!(
@@ -209,7 +212,7 @@ matrix_test!(hpexpire_and_hpttl, c, {
 });
 
 matrix_test!(hexpiretime_absolute, c, {
-    skip_if_version_below!(c, 7, 4, 0);
+    skip_unless_command!(c, "HEXPIRE");
     let k = common::key("h_et");
     c.hset(&k, &[("f", "v")]).await.unwrap();
     let future = 4_102_444_800; // year 2100 (seconds)

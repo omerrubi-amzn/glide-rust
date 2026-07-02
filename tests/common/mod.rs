@@ -152,18 +152,57 @@ fn parse_version(s: &str) -> Option<(u32, u32, u32)> {
     Some((major, minor, patch))
 }
 
-/// Query the connected server's version via `INFO server` (works on standalone
-/// and cluster clients). Reads `valkey_version:` or `redis_version:`.
+/// Recursively collect all string-shaped content from a [`glide::Value`] into
+/// `out`. Handles the flat bulk string a standalone `INFO` returns AND the
+/// multi-node Map/Array a cluster client returns (so the version can be found in
+/// either shape).
+fn collect_value_text(v: &glide::Value, out: &mut String) {
+    use glide::Value;
+    match v {
+        Value::BulkString(b) => {
+            out.push_str(&String::from_utf8_lossy(b));
+            out.push('\n');
+        }
+        Value::SimpleString(s) => {
+            out.push_str(s);
+            out.push('\n');
+        }
+        Value::VerbatimString { text, .. } => {
+            out.push_str(text);
+            out.push('\n');
+        }
+        Value::Array(items) | Value::Set(items) => {
+            for it in items {
+                collect_value_text(it, out);
+            }
+        }
+        Value::Map(pairs) => {
+            for (k, val) in pairs {
+                collect_value_text(k, out);
+                collect_value_text(val, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Query the connected server's version via `INFO server`. Works on standalone
+/// AND cluster clients: `custom_command` returns the raw reply, which we walk to
+/// find `valkey_version:` / `redis_version:` regardless of whether it is a flat
+/// bulk string (standalone) or a per-node Map (cluster).
 pub async fn server_version<C>(c: &C) -> Option<(u32, u32, u32)>
 where
-    C: glide::ServerManagementCommands + Sync,
+    C: glide::CustomCommand + Sync,
 {
-    let bytes = c.info_sections(&["server"]).await.ok()?;
-    let text = String::from_utf8_lossy(&bytes);
-    for line in text.lines() {
-        let line = line.trim();
-        for key in ["valkey_version:", "redis_version:"] {
-            if let Some(v) = line.strip_prefix(key) {
+    let reply = c.custom_command(&["INFO", "server"]).await.ok()?;
+    let mut text = String::new();
+    collect_value_text(&reply, &mut text);
+    // Prefer `valkey_version` — Valkey pins `redis_version` to a compat value
+    // (7.2.4) on ALL releases, so redis_version is useless for gating on Valkey.
+    // Fall back to redis_version only when there is no valkey_version (real Redis).
+    for key in ["valkey_version:", "redis_version:"] {
+        for line in text.lines() {
+            if let Some(v) = line.trim().strip_prefix(key) {
                 return parse_version(v);
             }
         }
@@ -171,11 +210,40 @@ where
     None
 }
 
+/// Whether the server recognises `name` (via `COMMAND INFO`). This is a
+/// version- and product-agnostic capability check — more robust than version
+/// math for commands whose availability differs between Redis and Valkey
+/// releases (e.g. hash-field TTL). Fails **closed** (returns `false`) if the
+/// capability cannot be determined, so gated tests SKIP rather than error.
+pub async fn command_exists<C>(c: &C, name: &str) -> bool
+where
+    C: glide::CustomCommand + Sync,
+{
+    match c.custom_command(&["COMMAND", "INFO", name]).await {
+        Ok(v) => command_info_present(&v),
+        Err(_) => false,
+    }
+}
+
+/// `COMMAND INFO <name>` returns `[[ <details> ]]` when known and `[nil]` when
+/// unknown. On cluster it may be a per-node Map. Present ⇔ a non-empty details
+/// array exists somewhere in the reply.
+fn command_info_present(v: &glide::Value) -> bool {
+    use glide::Value;
+    match v {
+        Value::Array(items) => items
+            .iter()
+            .any(|it| matches!(it, Value::Array(inner) if !inner.is_empty())),
+        Value::Map(pairs) => pairs.iter().any(|(_, val)| command_info_present(val)),
+        _ => false,
+    }
+}
+
 /// True when the server version is strictly below `min`. Returns `false` if the
 /// version cannot be determined (fail-open: run the test rather than skip).
 pub async fn version_below<C>(c: &C, min: (u32, u32, u32)) -> bool
 where
-    C: glide::ServerManagementCommands + Sync,
+    C: glide::CustomCommand + Sync,
 {
     match server_version(c).await {
         Some(v) => v < min,
@@ -816,6 +884,26 @@ macro_rules! skip_if_version_below {
     ($c:expr, $major:expr, $minor:expr, $patch:expr) => {{
         if $crate::common::version_below(&$c, ($major, $minor, $patch)).await {
             eprintln!("SKIP: requires server >= {}.{}.{}", $major, $minor, $patch);
+            return;
+        }
+    }};
+}
+
+/// Skip the current test (printing SKIP) unless the server recognises `$cmd` —
+/// a robust, version-agnostic capability gate (preferred over version math for
+/// commands whose availability differs across Redis/Valkey releases).
+///
+/// ```ignore
+/// matrix_test!(hexpire_sets_ttl, c, {
+///     skip_unless_command!(c, "HEXPIRE");
+///     // ...
+/// });
+/// ```
+#[macro_export]
+macro_rules! skip_unless_command {
+    ($c:expr, $cmd:expr) => {{
+        if !$crate::common::command_exists(&$c, $cmd).await {
+            eprintln!("SKIP: server does not support {}", $cmd);
             return;
         }
     }};
