@@ -1,0 +1,93 @@
+# CI for the valkey-glide Rust crate, baselined on upstream valkey-glide's
+# `lint-rust` action + `rust.yml` (fmt / clippy with & without features / doc /
+# feature-check / test / coverage / cargo-deny).
+#
+# The crate links glide-core + its vendored redis-rs via *git* deps pinned to a
+# rev of valkey-io/valkey-glide, so Cargo fetches them automatically — CI needs
+# network access to GitHub (GitHub-hosted runners have it) but no manual checkout
+# of the monorepo. crates.io publishing remains blocked by git deps (README).
+name: CI
+
+on:
+    push:
+        branches: [master, main]
+    pull_request: {}
+
+permissions:
+    contents: read
+
+jobs:
+    lint:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+            - name: Install Rust toolchain
+              run: rustup toolchain install stable --profile minimal --component rustfmt,clippy && rustup default stable
+            - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+              with:
+                  path: target
+                  key: x86_64-unknown-linux-gnu-lint
+            - name: Format
+              run: cargo fmt --all -- --check
+            - name: Clippy (all features)
+              run: cargo clippy --all-features --all-targets -- -D warnings
+            - name: Clippy (no features)
+              run: cargo clippy --all-targets -- -D warnings
+            - name: Docs
+              env:
+                  RUSTDOCFLAGS: "-D warnings"
+              run: cargo doc --no-deps --document-private-items
+
+    test:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+            - name: Install Rust toolchain
+              run: rustup toolchain install stable --profile minimal && rustup default stable
+            - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+              with:
+                  path: target
+                  key: x86_64-unknown-linux-gnu-test
+            - name: Install a Valkey/Redis server for integration tests
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y valkey-server || sudo apt-get install -y redis-server
+                  echo "VALKEY_SERVER_PATH=$(command -v valkey-server || command -v redis-server)" >> "$GITHUB_ENV"
+            - name: Build (debug)
+              run: cargo build --verbose
+            - name: Build (release)
+              run: cargo build --release --verbose
+            - name: Feature check
+              run: |
+                  cargo check --no-default-features
+                  cargo check --all-features
+                  cargo check --benches --all-features
+            - name: Test
+              run: cargo test --verbose
+
+    coverage:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+            - name: Install Rust toolchain
+              run: rustup toolchain install stable --profile minimal --component llvm-tools-preview && rustup default stable
+            - name: Install cargo-llvm-cov
+              run: cargo install --locked cargo-llvm-cov
+            - name: Install a Valkey/Redis server
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y valkey-server || sudo apt-get install -y redis-server
+                  echo "VALKEY_SERVER_PATH=$(command -v valkey-server || command -v redis-server)" >> "$GITHUB_ENV"
+            - name: Coverage
+              run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info --summary-only
+
+    deny:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+            - name: Install Rust toolchain
+              run: rustup toolchain install stable --profile minimal && rustup default stable
+            - name: cargo-deny
+              run: |
+                  cargo install --locked cargo-deny
+                  cargo deny check

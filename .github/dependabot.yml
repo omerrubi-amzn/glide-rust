@@ -1,0 +1,33 @@
+version: 2
+
+updates:
+    # Rust crate dependencies.
+    - package-ecosystem: "cargo"
+      directory: "/"
+      schedule:
+          interval: "weekly"
+          day: "monday"
+          time: "09:00"
+      open-pull-requests-limit: 10
+      groups:
+          patch-updates:
+              update-types:
+                  - "patch"
+          minor-updates:
+              update-types:
+                  - "minor"
+      labels:
+          - "dependencies"
+          - "rust 🦀"
+
+    # GitHub Actions used by CI.
+    - package-ecosystem: "github-actions"
+      directory: "/"
+      schedule:
+          interval: "weekly"
+          day: "monday"
+          time: "09:00"
+      open-pull-requests-limit: 10
+      labels:
+          - "dependencies"
+          - "github-actions"

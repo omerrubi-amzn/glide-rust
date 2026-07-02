@@ -1,0 +1,132 @@
+// Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
+//! Pub/Sub publishing and introspection commands.
+//!
+//! This covers the command-level Pub/Sub surface (`PUBLISH`, `SPUBLISH`, and the
+//! `PUBSUB` introspection subcommands). Receiving messages via a subscription is
+//! configured on the client connection (see the configuration types), not through
+//! these commands.
+
+use crate::error::Result;
+use crate::executor::CommandExecutor;
+use crate::value;
+use async_trait::async_trait;
+use bytes::Bytes;
+use redis::{Cmd, ToRedisArgs};
+
+/// Pub/Sub commands (`PUBLISH`, `SPUBLISH`, `PUBSUB ...`).
+#[async_trait]
+pub trait PubSubCommands: CommandExecutor {
+    /// Publish `message` to `channel` (`PUBLISH`). Returns the number of clients
+    /// that received the message.
+    async fn publish<C: ToRedisArgs + Send, M: ToRedisArgs + Send>(
+        &self,
+        channel: C,
+        message: M,
+    ) -> Result<i64> {
+        let mut cmd = Cmd::new();
+        cmd.arg("PUBLISH").arg(channel).arg(message);
+        value::to_i64(self.execute_command(cmd, None).await?)
+    }
+
+    /// Publish `message` to a shard `channel` (`SPUBLISH`, cluster). Returns the
+    /// number of clients that received the message.
+    async fn spublish<C: ToRedisArgs + Send, M: ToRedisArgs + Send>(
+        &self,
+        channel: C,
+        message: M,
+    ) -> Result<i64> {
+        let mut cmd = Cmd::new();
+        cmd.arg("SPUBLISH").arg(channel).arg(message);
+        value::to_i64(self.execute_command(cmd, None).await?)
+    }
+
+    /// List active channels, optionally matching `pattern` (`PUBSUB CHANNELS`).
+    async fn pubsub_channels(&self, pattern: Option<&[u8]>) -> Result<Vec<Bytes>> {
+        self.pubsub_channels_impl("CHANNELS", pattern).await
+    }
+
+    /// List active shard channels, optionally matching `pattern`
+    /// (`PUBSUB SHARDCHANNELS`).
+    async fn pubsub_shardchannels(&self, pattern: Option<&[u8]>) -> Result<Vec<Bytes>> {
+        self.pubsub_channels_impl("SHARDCHANNELS", pattern).await
+    }
+
+    /// Get the number of subscriptions to patterns (`PUBSUB NUMPAT`).
+    async fn pubsub_numpat(&self) -> Result<i64> {
+        let mut cmd = Cmd::new();
+        cmd.arg("PUBSUB").arg("NUMPAT");
+        value::to_i64(self.execute_command(cmd, None).await?)
+    }
+
+    /// Get the number of subscribers per channel (`PUBSUB NUMSUB`).
+    async fn pubsub_numsub<C: ToRedisArgs + Send + Sync>(
+        &self,
+        channels: &[C],
+    ) -> Result<Vec<(Bytes, i64)>> {
+        self.pubsub_numsub_impl("NUMSUB", channels).await
+    }
+
+    /// Get the number of subscribers per shard channel (`PUBSUB SHARDNUMSUB`).
+    async fn pubsub_shardnumsub<C: ToRedisArgs + Send + Sync>(
+        &self,
+        channels: &[C],
+    ) -> Result<Vec<(Bytes, i64)>> {
+        self.pubsub_numsub_impl("SHARDNUMSUB", channels).await
+    }
+
+    #[doc(hidden)]
+    async fn pubsub_channels_impl(
+        &self,
+        sub: &'static str,
+        pattern: Option<&[u8]>,
+    ) -> Result<Vec<Bytes>> {
+        let mut cmd = Cmd::new();
+        cmd.arg("PUBSUB").arg(sub);
+        if let Some(p) = pattern {
+            cmd.arg(p);
+        }
+        match self.execute_command(cmd, None).await? {
+            redis::Value::Array(items) => items.into_iter().map(value::to_bytes).collect(),
+            redis::Value::Nil => Ok(Vec::new()),
+            other => Ok(vec![value::to_bytes(other)?]),
+        }
+    }
+
+    #[doc(hidden)]
+    async fn pubsub_numsub_impl<C: ToRedisArgs + Send + Sync>(
+        &self,
+        sub: &'static str,
+        channels: &[C],
+    ) -> Result<Vec<(Bytes, i64)>> {
+        let mut cmd = Cmd::new();
+        cmd.arg("PUBSUB").arg(sub);
+        for c in channels {
+            cmd.arg(c);
+        }
+        parse_numsub(self.execute_command(cmd, None).await?)
+    }
+}
+
+/// Parse a `PUBSUB NUMSUB` reply (flat `[channel, count, ...]` or RESP3 map).
+fn parse_numsub(v: redis::Value) -> Result<Vec<(Bytes, i64)>> {
+    match v {
+        redis::Value::Nil => Ok(Vec::new()),
+        redis::Value::Map(pairs) => pairs
+            .into_iter()
+            .map(|(c, n)| Ok((value::to_bytes(c)?, value::to_i64(n)?)))
+            .collect(),
+        redis::Value::Array(items) => {
+            let mut out = Vec::with_capacity(items.len() / 2);
+            let mut iter = items.into_iter();
+            while let (Some(c), Some(n)) = (iter.next(), iter.next()) {
+                out.push((value::to_bytes(c)?, value::to_i64(n)?));
+            }
+            Ok(out)
+        }
+        other => Err(crate::error::GlideError::Request(format!(
+            "unexpected PUBSUB NUMSUB reply: {other:?}"
+        ))),
+    }
+}
+
+impl<T: CommandExecutor + ?Sized> PubSubCommands for T {}
