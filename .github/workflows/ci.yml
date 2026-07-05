@@ -156,7 +156,42 @@ jobs:
             - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
             - name: Install Rust toolchain
               run: rustup toolchain install stable --profile minimal && rustup default stable
-            - name: cargo-deny
+            # Cache the crates.io index/cache, the git-dependency clones
+            # (glide-core/redis from valkey-io/valkey-glide), and the cargo-deny
+            # binary. This avoids a cold registry+git fetch on every run — the
+            # main source of transient failures for this job, since resolving the
+            # git deps forces a crates.io index update that occasionally 403s.
+            - name: Cache cargo registry, git deps, and cargo-deny
+              uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+              with:
+                  path: |
+                      ~/.cargo/registry/index
+                      ~/.cargo/registry/cache
+                      ~/.cargo/git/db
+                      ~/.cargo/bin/cargo-deny
+                  key: deny-${{ hashFiles('Cargo.lock') }}
+                  restore-keys: |
+                      deny-
+            - name: Install cargo-deny
+              run: command -v cargo-deny >/dev/null 2>&1 || cargo install --locked cargo-deny
+            - name: cargo-deny (retry transient network errors only)
               run: |
-                  cargo install --locked cargo-deny
-                  cargo deny check
+                  set -uo pipefail
+                  for attempt in 1 2 3; do
+                      out="$(cargo deny check 2>&1)"; status=$?
+                      echo "$out"
+                      if [ "$status" -eq 0 ]; then
+                          exit 0
+                      fi
+                      # Retry only spurious registry/network failures; a real
+                      # advisory/license/ban/source violation fails immediately.
+                      if echo "$out" | grep -qiE 'spurious network error|failed to fetch|Updating crates.io index|http status code: (403|429|5[0-9][0-9])|failed to get .* as a dependency'; then
+                          echo "::warning::cargo deny hit a transient network error (attempt ${attempt}); retrying..."
+                          sleep $((attempt * 15))
+                      else
+                          echo "::error::cargo deny reported a policy violation (not a network error)."
+                          exit "$status"
+                      fi
+                  done
+                  echo "::error::cargo deny still failing after retries (persistent network issue)."
+                  exit 1
