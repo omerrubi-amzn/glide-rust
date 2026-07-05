@@ -1,7 +1,6 @@
 # Valkey GLIDE for Rust (`glide`)
 
 [![CI](https://github.com/omerrubi-amzn/glide-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/omerrubi-amzn/glide-rust/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/omerrubi-amzn/glide-rust/branch/main/graph/badge.svg)](https://codecov.io/gh/omerrubi-amzn/glide-rust)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 
