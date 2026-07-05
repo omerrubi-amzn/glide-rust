@@ -1248,7 +1248,6 @@ dependencies = [
  "criterion",
  "futures",
  "glide-core",
- "libc",
  "once_cell",
  "redis",
  "thiserror 2.0.18",
