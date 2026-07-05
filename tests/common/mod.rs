@@ -319,8 +319,14 @@ impl TestServer {
 
     /// Connect an async client using the given RESP protocol version.
     pub async fn client_with_protocol(&self, protocol: ProtocolVersion) -> GlideClient {
-        let config =
-            GlideClientConfiguration::with_address("127.0.0.1", self.port).protocol(protocol);
+        // Generous connect/request timeouts: under heavy load (e.g. the coverage
+        // job runs the whole suite under llvm-cov instrumentation, with many
+        // ephemeral servers spawned in parallel), a freshly-started server can be
+        // slow to accept — the default connect timeout can then race and fail.
+        let config = GlideClientConfiguration::with_address("127.0.0.1", self.port)
+            .protocol(protocol)
+            .connection_timeout(Duration::from_secs(10))
+            .request_timeout(Duration::from_secs(10));
         GlideClient::connect(config)
             .await
             .expect("connect to test server")
