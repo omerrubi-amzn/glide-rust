@@ -1,5 +1,5 @@
 [package]
-name = "valkey-glide"
+name = "glide-rust"
 version = "0.1.0"
 # edition 2024 to match the upstream valkey-glide Rust crates (glide-core, ffi,
 # python/glide-async, logger_core). No `rust-version` (MSRV) is declared, matching
@@ -8,9 +8,7 @@ edition = "2024"
 license = "Apache-2.0"
 authors = ["Valkey GLIDE Maintainers"]
 description = "Valkey GLIDE — native Rust client for Valkey and Redis OSS, built on glide-core."
-# TODO: set `repository` to the standalone repo URL once it is created. Left
-# unset for now rather than pointing at a repo that isn't this crate's home.
-# repository = "https://github.com/<org>/<repo>"
+repository = "https://github.com/omerrubi-amzn/glide-rust"
 readme = "README.md"
 keywords = ["valkey", "redis", "glide", "client", "database"]
 categories = ["database", "asynchronous"]

@@ -1240,6 +1240,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "glide-rust"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "criterion",
+ "futures",
+ "glide-core",
+ "libc",
+ "once_cell",
+ "redis",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "glob"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3330,22 +3346,6 @@ dependencies = [
  "js-sys",
  "rand 0.10.1",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "valkey-glide"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "bytes",
- "criterion",
- "futures",
- "glide-core",
- "libc",
- "once_cell",
- "redis",
- "thiserror 2.0.18",
- "tokio",
 ]
 
 [[package]]
