@@ -139,7 +139,12 @@ jobs:
                   sudo apt-get install -y valkey-server || sudo apt-get install -y redis-server
                   echo "VALKEY_SERVER_PATH=$(command -v valkey-server || command -v redis-server)" >> "$GITHUB_ENV"
             - name: Coverage
-              run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info --summary-only
+              # Cap test parallelism: under llvm-cov instrumentation the whole
+              # suite runs at once and each integration test spawns its own
+              # ephemeral server. Limiting to 2 threads keeps only a couple of
+              # instrumented servers alive concurrently, avoiding server-startup
+              # connect timeouts on the shared runner.
+              run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info --summary-only -- --test-threads=2
             - name: Upload coverage to Codecov
               uses: codecov/codecov-action@v7
               with:
