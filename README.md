@@ -152,7 +152,7 @@ client.custom_command_with_route(&["PING"], Route::AllPrimaries).await?;
 # Ok(()) }
 ```
 
-See `DESIGN.md` and `PLANNING.md` for architecture, and `DEVELOPER.md` for how to
+See `DESIGN.md` for architecture, and `DEVELOPER.md` for how to
 build, test, and benchmark.
 
 ## Testing
