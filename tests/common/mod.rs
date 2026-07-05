@@ -27,56 +27,62 @@ use glide::{
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-/// Kill leaked shared-cluster child processes at test-process exit.
+// ---------------------------------------------------------------------------
+// Per-test wall-clock timeout guard (G1)
+// ---------------------------------------------------------------------------
+
+/// Wall-clock budget for a single test. A wedged `await` — e.g. a pub/sub
+/// receive that never arrives, or a cluster op that never returns — would
+/// otherwise block the whole CI job indefinitely. This bounds every test the
+/// way glide-core's `#[timeout(...)]` attribute does.
 ///
-/// The shared cluster is owned by a `static` (see [`shared_cluster`]) whose
-/// `Drop` never runs, so we register each cluster node's PID and install a single
-/// `atexit` reaper (Linux). `PR_SET_PDEATHSIG` is unsuitable here because it fires
-/// when the *spawning thread* exits — which for a shared, cross-test cluster is
-/// the first test's thread, not the process.
-#[cfg(target_os = "linux")]
-mod cluster_reaper {
-    use std::sync::{Mutex, Once};
+/// Overridable via `GLIDE_TEST_TIMEOUT_SECS` (default 120s — generous so it
+/// never false-trips under `llvm-cov` instrumentation, yet still catches a
+/// genuine hang, which is unbounded).
+pub fn test_timeout() -> Duration {
+    let secs = std::env::var("GLIDE_TEST_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(120);
+    Duration::from_secs(secs)
+}
 
-    static PIDS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
-    static REGISTERED: Once = Once::new();
-
-    /// Record a child PID and ensure the `atexit` reaper is installed once.
-    pub fn register(pid: u32) {
-        if let Ok(mut pids) = PIDS.lock() {
-            pids.push(pid);
-        }
-        REGISTERED.call_once(|| {
-            // SAFETY: registering a plain `extern "C"` fn with libc atexit.
-            unsafe {
-                libc::atexit(reap);
-            }
-        });
-    }
-
-    extern "C" fn reap() {
-        if let Ok(pids) = PIDS.lock() {
-            for &pid in pids.iter() {
-                // SAFETY: best-effort SIGKILL of a process we spawned.
-                unsafe {
-                    libc::kill(pid as libc::pid_t, libc::SIGKILL);
-                }
-            }
-        }
+/// Run a test future under [`test_timeout`], panicking (failing the test) if it
+/// does not complete in time — so a hang surfaces as a fast, clear failure
+/// instead of a stuck CI job. Used automatically by [`resp_test!`],
+/// [`matrix_test!`] and [`timed_tokio_test!`].
+pub async fn with_test_timeout<F: std::future::Future>(fut: F) -> F::Output {
+    let budget = test_timeout();
+    match tokio::time::timeout(budget, fut).await {
+        Ok(v) => v,
+        Err(_) => panic!(
+            "test exceeded {budget:?} wall-clock timeout \
+             (set GLIDE_TEST_TIMEOUT_SECS to adjust)"
+        ),
     }
 }
 
-/// Register a shared-cluster child PID for cleanup at process exit (no-op off
-/// Linux, where the `static` owner simply leaks the processes).
-fn reap_on_exit(pid: u32) {
-    #[cfg(target_os = "linux")]
-    cluster_reaper::register(pid);
-    #[cfg(not(target_os = "linux"))]
-    let _ = pid;
+/// Define a `#[tokio::test]` whose body is bounded by [`with_test_timeout`].
+/// Use for hand-written async tests; the `resp_test!` / `matrix_test!` macros
+/// apply the same guard automatically.
+///
+/// ```ignore
+/// timed_tokio_test!(async fn my_test() {
+///     let srv = server_or_skip!();
+///     // ...
+/// });
+/// ```
+#[macro_export]
+macro_rules! timed_tokio_test {
+    (async fn $name:ident() $body:block) => {
+        #[tokio::test]
+        async fn $name() {
+            $crate::common::with_test_timeout(async move $body).await;
+        }
+    };
 }
 
 /// Locate a usable `valkey-server`/`redis-server` binary. Set the
@@ -263,6 +269,40 @@ fn wait_for_port(port: u16, timeout: Duration) -> bool {
     false
 }
 
+/// Extract a numeric `CLUSTER INFO` field value, e.g.
+/// `cluster_info_field(info, "cluster_known_nodes") == Some(3)`.
+fn cluster_info_field(info: &str, field: &str) -> Option<u64> {
+    for line in info.lines() {
+        if let Some(rest) = line.trim().strip_prefix(field)
+            && let Some(v) = rest.strip_prefix(':')
+        {
+            return v.trim().parse().ok();
+        }
+    }
+    None
+}
+
+/// Whether a native-cluster node reports FULL convergence — not merely
+/// `cluster_state:ok`, which alone can precede a settled slot map / peer view
+/// and let a routed command hit a `MOVED` to a not-yet-known node. We gate on
+/// three `CLUSTER INFO` fields (mirroring upstream `cluster_manager.py`'s
+/// slot-coverage + `cluster_state:ok` + topology-views checks):
+///   * `cluster_state:ok`             — node considers the cluster usable;
+///   * `cluster_slots_assigned:16384` — full slot coverage (G7);
+///   * `cluster_known_nodes:<shards>` — node sees the whole topology (G2).
+fn node_fully_converged(port: u16, shards: usize) -> bool {
+    let Ok(mut s) = TcpStream::connect(("127.0.0.1", port)) else {
+        return false;
+    };
+    let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
+    let Ok(info) = raw_cmd(&mut s, &["CLUSTER", "INFO"]) else {
+        return false;
+    };
+    info.contains("cluster_state:ok")
+        && cluster_info_field(&info, "cluster_slots_assigned") == Some(16384)
+        && cluster_info_field(&info, "cluster_known_nodes") == Some(shards as u64)
+}
+
 // ---------------------------------------------------------------------------
 // Standalone server
 // ---------------------------------------------------------------------------
@@ -327,9 +367,7 @@ impl TestServer {
             .protocol(protocol)
             .connection_timeout(Duration::from_secs(10))
             .request_timeout(Duration::from_secs(10));
-        GlideClient::connect(config)
-            .await
-            .expect("connect to test server")
+        connect_standalone_with_retry(config).await
     }
 
     /// Try to connect a client with the given configuration (for auth tests).
@@ -346,6 +384,25 @@ impl Drop for TestServer {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// Connect a standalone client, retrying on transient connect failures. Under
+/// heavy load (e.g. many `llvm-cov`-instrumented ephemeral servers spawned in
+/// parallel), a freshly-started server can be briefly slow to accept or finish
+/// the handshake; a single attempt can lose that race even with a generous
+/// connection timeout. Mirrors glide-core's test connect-retry patch.
+async fn connect_standalone_with_retry(config: GlideClientConfiguration) -> GlideClient {
+    let mut last_err = None;
+    for attempt in 0..10u32 {
+        match GlideClient::connect(config.clone()).await {
+            Ok(c) => return c,
+            Err(e) => {
+                last_err = Some(e);
+                tokio::time::sleep(Duration::from_millis(100 * (attempt + 1) as u64)).await;
+            }
+        }
+    }
+    panic!("connect to test server failed after retries: {last_err:?}");
 }
 
 // ---------------------------------------------------------------------------
@@ -466,22 +523,17 @@ impl ClusterHarness {
             return None;
         }
 
-        // Parse SERVERS_JSON for pids (cleanup) and primary/replica split.
-        let mut pids: Vec<u32> = Vec::new();
+        // Parse SERVERS_JSON for the primary/replica split.
         let mut primary_ports: Vec<u16> = Vec::new();
         let mut replica_ports: Vec<u16> = Vec::new();
         if let Some(json_line) = stdout.lines().find(|l| l.starts_with("SERVERS_JSON=")) {
             let json = &json_line["SERVERS_JSON=".len()..];
             for obj in json.split('{').skip(1) {
                 let port = field_u64(obj, "\"port\"").map(|v| v as u16);
-                let pid = field_u64(obj, "\"pid\"").map(|v| v as u32);
                 let is_primary = obj
                     .split_once("\"is_primary\"")
                     .map(|(_, r)| r.contains("true"))
                     .unwrap_or(false);
-                if let Some(pid) = pid {
-                    pids.push(pid);
-                }
                 if let Some(port) = port {
                     if is_primary {
                         primary_ports.push(port);
@@ -490,9 +542,6 @@ impl ClusterHarness {
                     }
                 }
             }
-        }
-        for pid in &pids {
-            reap_on_exit(*pid);
         }
 
         // Seed on a primary if we identified one, else the first node.
@@ -552,9 +601,6 @@ impl ClusterHarness {
                 .stderr(Stdio::null());
             match command.spawn() {
                 Ok(c) => {
-                    // The shared cluster's `static` owner never runs Drop; ensure
-                    // the node is killed at test-process exit.
-                    reap_on_exit(c.id());
                     children.push(c);
                 }
                 Err(_) => break,
@@ -611,23 +657,21 @@ impl ClusterHarness {
             }
         }
 
-        // Poll until every node reports state ok (not just the seed), so that
-        // routed commands to any node see a converged cluster even under heavy
-        // concurrent load.
+        // Wait for FULL convergence before returning the cluster. A node
+        // reporting `cluster_state:ok` alone is insufficient: right after
+        // formation its slot map / peer view can still be settling, so the first
+        // routed op may hit a `MOVED` to a not-yet-known node. We therefore gate
+        // on every node reaching full slot coverage AND full topology awareness
+        // (see [`node_fully_converged`]) — the source-level fix for the
+        // cluster-scan startup race that `warm_up_cluster`/`retry_transient!`
+        // otherwise paper over.
         let deadline = Instant::now() + Duration::from_secs(20);
         let mut all_ok = false;
         while Instant::now() < deadline {
-            let mut converged = 0;
-            for &port in &ports {
-                if let Ok(mut s) = TcpStream::connect(("127.0.0.1", port)) {
-                    let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
-                    if let Ok(info) = raw_cmd(&mut s, &["CLUSTER", "INFO"])
-                        && info.contains("cluster_state:ok")
-                    {
-                        converged += 1;
-                    }
-                }
-            }
+            let converged = ports
+                .iter()
+                .filter(|&&port| node_fully_converged(port, shards))
+                .count();
             if converged == ports.len() {
                 all_ok = true;
                 break;
@@ -637,8 +681,6 @@ impl ClusterHarness {
         if !all_ok {
             return None;
         }
-        // Small settle so topology (slot ownership per node) fully propagates.
-        std::thread::sleep(Duration::from_millis(500));
         Some(harness)
     }
 
@@ -655,7 +697,22 @@ impl ClusterHarness {
         let config = GlideClusterClientConfiguration::with_address("127.0.0.1", self.ports[0])
             .protocol(protocol)
             .request_timeout(Duration::from_secs(5));
-        let client = GlideClusterClient::connect(config).await.ok()?;
+        // Bounded connect-retry: under load a freshly-formed cluster can briefly
+        // refuse or time out the initial connection; a single attempt shouldn't
+        // fail the whole test.
+        let mut client = None;
+        for attempt in 0..10u32 {
+            match GlideClusterClient::connect(config.clone()).await {
+                Ok(c) => {
+                    client = Some(c);
+                    break;
+                }
+                Err(_) => {
+                    tokio::time::sleep(Duration::from_millis(100 * (attempt + 1) as u64)).await;
+                }
+            }
+        }
+        let client = client?;
         // Converge the connection map before handing the client to a test: right
         // after a cluster forms, the client's topology snapshot can lag, so the
         // first routed op may hit a `MOVED` to a not-yet-connected node
@@ -674,8 +731,7 @@ impl ClusterHarness {
 impl Drop for ClusterHarness {
     fn drop(&mut self) {
         if let Some(folder) = &self.managed_folder {
-            // Managed backend: stop via cluster_manager.py (best effort). The
-            // atexit reaper also has the pids as a backstop.
+            // Managed backend: stop via cluster_manager.py (best effort).
             if let Ok(script) = std::env::var("GLIDE_CLUSTER_MANAGER") {
                 let _ = Command::new("python3")
                     .args([&script, "stop", "--cluster-folder", folder])
@@ -693,40 +749,14 @@ impl Drop for ClusterHarness {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Shared cluster (one per test binary, like Python's session-scoped fixture)
-// ---------------------------------------------------------------------------
-
-/// A lazily-started cluster shared across all tests in the *current test binary*.
-///
-/// Starting a cluster costs several seconds, so the `matrix_test!` cluster arms
-/// reuse a single instance (mirroring Python's session-scoped `valkey_cluster`
-/// fixture). Test isolation relies on unique keys ([`key`]/[`tkey`]), not
-/// `FLUSHALL`, so the shared cluster is never mutated globally. Child processes
-/// are killed on test-process exit via an `atexit` reaper (see [`reap_on_exit`]),
-/// so the leaked `static` owner does not leave servers running.
-///
-/// Returns `None` (tests SKIP) when a cluster cannot be formed in this
-/// environment.
-pub fn shared_cluster() -> Option<&'static ClusterHarness> {
-    static CLUSTER: OnceLock<Option<ClusterHarness>> = OnceLock::new();
-    // The shared cluster is owned by a `static` whose `Drop` never runs, so it
-    // MUST use the native backend: its child PIDs are direct children we spawn,
-    // which the `atexit` reaper kills reliably. (cluster_manager.py's reported
-    // PIDs can indirect through a launcher, leaking servers with no Drop to run
-    // `stop`.) Tests needing replicas create their own managed `ClusterHarness`,
-    // which is cleaned up by its `Drop`.
-    CLUSTER
-        .get_or_init(|| ClusterHarness::start_native(3))
-        .as_ref()
-}
-
 /// Whether an error is a *transient* cluster-topology error — the kind that can
 /// occur while a freshly-formed cluster client's slot→node connection map is
 /// still converging. Right after a cluster forms, a command can hit a `MOVED`
 /// redirect to a node not yet in the connection map, surfacing as
 /// `ConnectionNotFoundForRoute`; a topology refresh is triggered but the
-/// in-flight op fails. These are safe to retry.
+/// in-flight op fails. `TRYAGAIN` (multi-key op spanning a slot mid-migration)
+/// and `LOADING` (a node still reading its dataset into memory) are likewise
+/// transient right after startup. These are all safe to retry.
 pub fn is_transient_cluster_error(e: &glide::GlideError) -> bool {
     let m = e.to_string();
     m.contains("ConnectionNotFoundForRoute")
@@ -734,6 +764,11 @@ pub fn is_transient_cluster_error(e: &glide::GlideError) -> bool {
         || m.contains("connection map")
         || m.contains("MOVED")
         || m.contains("Moved")
+        || m.contains("TRYAGAIN")
+        || m.contains("TryAgain")
+        || m.contains("LOADING")
+        || m.contains("Loading")
+        || m.contains("loading the dataset")
 }
 
 /// Force a freshly-connected cluster client to connect to every primary so its
@@ -752,6 +787,80 @@ async fn warm_up_cluster(client: &GlideClusterClient) {
             }
             Err(_) => return,
         }
+    }
+}
+
+/// Extract the subscriber count for `channel` from a `PUBSUB NUMSUB` reply
+/// (`[chan, count, ...]` in RESP2, or a map in RESP3).
+fn numsub_count(v: &glide::Value, channel: &str) -> Option<i64> {
+    use glide::Value;
+    let is_chan = |k: &Value| match k {
+        Value::BulkString(b) => b.as_slice() == channel.as_bytes(),
+        Value::SimpleString(s) => s == channel,
+        _ => false,
+    };
+    match v {
+        Value::Array(items) => {
+            let mut it = items.iter();
+            while let (Some(k), Some(val)) = (it.next(), it.next()) {
+                if is_chan(k) {
+                    return glide::value::to_i64(val.clone()).ok();
+                }
+            }
+            None
+        }
+        Value::Map(pairs) => pairs
+            .iter()
+            .find(|(k, _)| is_chan(k))
+            .and_then(|(_, val)| glide::value::to_i64(val.clone()).ok()),
+        _ => None,
+    }
+}
+
+/// Poll `PUBSUB NUMSUB <channel>` on `c` until the subscriber count for
+/// `channel` satisfies `pred`, or `timeout` elapses; returns whether the
+/// predicate was met. Use instead of a fixed sleep after (un)subscribe so a test
+/// proceeds the instant the server has registered the change and never races a
+/// slow registration (the Rust analogue of Python's `wait_for_subscription_state`).
+pub async fn wait_for_numsub<C, F>(c: &C, channel: &str, mut pred: F, timeout: Duration) -> bool
+where
+    C: glide::CustomCommand + Sync,
+    F: FnMut(i64) -> bool,
+{
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Ok(v) = c.custom_command(&["PUBSUB", "NUMSUB", channel]).await
+            && let Some(n) = numsub_count(&v, channel)
+            && pred(n)
+        {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Poll `PUBSUB NUMPAT` on `c` until the total pattern-subscription count
+/// satisfies `pred`, or `timeout` elapses.
+pub async fn wait_for_numpat<C, F>(c: &C, mut pred: F, timeout: Duration) -> bool
+where
+    C: glide::CustomCommand + Sync,
+    F: FnMut(i64) -> bool,
+{
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Ok(v) = c.custom_command(&["PUBSUB", "NUMPAT"]).await
+            && let Ok(n) = glide::value::to_i64(v)
+            && pred(n)
+        {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -832,7 +941,7 @@ macro_rules! resp_test {
                 let $c = __srv
                     .client_with_protocol(glide::ProtocolVersion::RESP2)
                     .await;
-                $body
+                $crate::common::with_test_timeout(async { $body }).await;
             }
 
             #[tokio::test]
@@ -841,7 +950,7 @@ macro_rules! resp_test {
                 let $c = __srv
                     .client_with_protocol(glide::ProtocolVersion::RESP3)
                     .await;
-                $body
+                $crate::common::with_test_timeout(async { $body }).await;
             }
         }
     };
@@ -852,8 +961,8 @@ macro_rules! resp_test {
 /// `cluster_mode × protocol` parametrization (the ~4× multiplier).
 ///
 /// * standalone arms get a fresh [`TestServer`] each (cheap, fully isolated);
-/// * cluster arms share the per-binary [`shared_cluster`] and SKIP if a cluster
-///   cannot be formed.
+/// * cluster arms form a fresh per-test [`ClusterHarness`] each (fully isolated;
+///   SKIP if a cluster cannot be formed in this environment).
 ///
 /// The body must be **cluster-safe**: use [`common::key`] for single-key work and
 /// [`common::tkey`] (hash-tagged) so multi-key commands land in one slot. The
@@ -881,7 +990,7 @@ macro_rules! matrix_test {
                 let $c = __srv
                     .client_with_protocol(glide::ProtocolVersion::RESP2)
                     .await;
-                $body
+                $crate::common::with_test_timeout(async { $body }).await;
             }
 
             #[tokio::test]
@@ -890,12 +999,12 @@ macro_rules! matrix_test {
                 let $c = __srv
                     .client_with_protocol(glide::ProtocolVersion::RESP3)
                     .await;
-                $body
+                $crate::common::with_test_timeout(async { $body }).await;
             }
 
             #[tokio::test]
             async fn cluster_resp2() {
-                let __h = match $crate::common::shared_cluster() {
+                let __h = match $crate::common::ClusterHarness::start() {
                     Some(h) => h,
                     None => {
                         eprintln!("SKIP: cluster harness not feasible in this environment");
@@ -912,12 +1021,12 @@ macro_rules! matrix_test {
                         return;
                     }
                 };
-                $body
+                $crate::common::with_test_timeout(async { $body }).await;
             }
 
             #[tokio::test]
             async fn cluster_resp3() {
-                let __h = match $crate::common::shared_cluster() {
+                let __h = match $crate::common::ClusterHarness::start() {
                     Some(h) => h,
                     None => {
                         eprintln!("SKIP: cluster harness not feasible in this environment");
@@ -934,7 +1043,7 @@ macro_rules! matrix_test {
                         return;
                     }
                 };
-                $body
+                $crate::common::with_test_timeout(async { $body }).await;
             }
         }
     };

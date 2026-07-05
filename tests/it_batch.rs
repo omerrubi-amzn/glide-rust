@@ -206,65 +206,67 @@ async fn non_atomic_mixed_reads_writes_ordered() {
     assert!(matches!(r[5], glide::Value::Nil));
 }
 
-#[tokio::test]
-async fn cluster_atomic_transaction_same_slot() {
-    let h = match common::shared_cluster() {
-        Some(h) => h,
-        None => {
-            eprintln!("SKIP: cluster harness not feasible");
-            return;
-        }
-    };
-    let c = match h.client().await {
-        Some(c) => c,
-        None => {
-            eprintln!("SKIP: cluster connect failed");
-            return;
-        }
-    };
-    // All keys share a hash tag → same slot → a cluster MULTI/EXEC is valid.
-    let k1 = common::tkey("btx", "k1");
-    let k2 = common::tkey("btx", "k2");
-    let mut batch = Batch::new(true);
-    batch
-        .set(&k1, "10")
-        .incr(&k1)
-        .set(&k2, "x")
-        .get(&k1)
-        .get(&k2);
-    let r = c.exec(&batch, true, None).await.unwrap();
-    assert_eq!(r.len(), 5);
-    assert_eq!(glide::value::to_i64(r[1].clone()).unwrap(), 11);
-    assert_eq!(glide::value::to_string(r[3].clone()).unwrap(), "11");
-    assert_eq!(glide::value::to_string(r[4].clone()).unwrap(), "x");
-}
+timed_tokio_test!(
+    async fn cluster_atomic_transaction_same_slot() {
+        let h = match common::ClusterHarness::start() {
+            Some(h) => h,
+            None => {
+                eprintln!("SKIP: cluster harness not feasible");
+                return;
+            }
+        };
+        let c = match h.client().await {
+            Some(c) => c,
+            None => {
+                eprintln!("SKIP: cluster connect failed");
+                return;
+            }
+        };
+        // All keys share a hash tag → same slot → a cluster MULTI/EXEC is valid.
+        let k1 = common::tkey("btx", "k1");
+        let k2 = common::tkey("btx", "k2");
+        let mut batch = Batch::new(true);
+        batch
+            .set(&k1, "10")
+            .incr(&k1)
+            .set(&k2, "x")
+            .get(&k1)
+            .get(&k2);
+        let r = c.exec(&batch, true, None).await.unwrap();
+        assert_eq!(r.len(), 5);
+        assert_eq!(glide::value::to_i64(r[1].clone()).unwrap(), 11);
+        assert_eq!(glide::value::to_string(r[3].clone()).unwrap(), "11");
+        assert_eq!(glide::value::to_string(r[4].clone()).unwrap(), "x");
+    }
+);
 
-#[tokio::test]
-async fn cluster_non_atomic_pipeline() {
-    let h = match common::shared_cluster() {
-        Some(h) => h,
-        None => {
-            eprintln!("SKIP: cluster harness not feasible");
-            return;
-        }
-    };
-    let c = match h.client().await {
-        Some(c) => c,
-        None => {
-            eprintln!("SKIP: cluster connect failed");
-            return;
-        }
-    };
-    // A non-atomic pipeline may span slots; GLIDE routes each command.
-    let mut batch = Batch::new(false);
-    let a = common::key("bp_a");
-    let b = common::key("bp_b");
-    batch.set(&a, "1").set(&b, "2").get(&a).get(&b);
-    let r = c.exec(&batch, true, None).await.unwrap();
-    assert_eq!(r.len(), 4);
-    assert_eq!(glide::value::to_string(r[2].clone()).unwrap(), "1");
-    assert_eq!(glide::value::to_string(r[3].clone()).unwrap(), "2");
-}
+timed_tokio_test!(
+    async fn cluster_non_atomic_pipeline() {
+        let h = match common::ClusterHarness::start() {
+            Some(h) => h,
+            None => {
+                eprintln!("SKIP: cluster harness not feasible");
+                return;
+            }
+        };
+        let c = match h.client().await {
+            Some(c) => c,
+            None => {
+                eprintln!("SKIP: cluster connect failed");
+                return;
+            }
+        };
+        // A non-atomic pipeline may span slots; GLIDE routes each command.
+        let mut batch = Batch::new(false);
+        let a = common::key("bp_a");
+        let b = common::key("bp_b");
+        batch.set(&a, "1").set(&b, "2").get(&a).get(&b);
+        let r = c.exec(&batch, true, None).await.unwrap();
+        assert_eq!(r.len(), 4);
+        assert_eq!(glide::value::to_string(r[2].clone()).unwrap(), "1");
+        assert_eq!(glide::value::to_string(r[3].clone()).unwrap(), "2");
+    }
+);
 
 #[tokio::test]
 async fn pipeline_with_batch_options_timeout_and_retry() {
