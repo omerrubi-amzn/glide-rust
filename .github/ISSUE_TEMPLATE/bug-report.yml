@@ -42,7 +42,7 @@ body:
       id: crate-version
       attributes:
           label: Crate version
-          description: The `valkey-glide` (glide) crate version or git revision.
+          description: The `glide-rust` (glide) crate version or git revision.
       validations:
           required: true
 

@@ -1,4 +1,4 @@
-# CI for the valkey-glide Rust crate.
+# CI for the glide-rust crate.
 #
 # Parity with the upstream valkey-glide test strategy: the `test` job runs as a
 # matrix over **engine version × architecture**, mirroring

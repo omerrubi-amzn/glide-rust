@@ -1,4 +1,4 @@
-# Comprehensive Code Review — `valkey-glide` (native Rust client, lib `glide`)
+# Comprehensive Code Review — `glide-rust` (native Rust client, lib `glide`)
 
 **Reviewer:** `meshclaw-sde` (autopilot) with the `idiomatic-rust` skill checklist (corrode.dev).
 **Scope:** whole crate at repo root, branch `review/comprehensive`, HEAD `fcb5c4a`.
