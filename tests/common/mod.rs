@@ -22,7 +22,7 @@
 
 use glide::{
     GlideClient, GlideClientConfiguration, GlideClusterClient, GlideClusterClientConfiguration,
-    ProtocolVersion,
+    ProtocolVersion, Route,
 };
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -649,7 +649,14 @@ impl ClusterHarness {
         let config = GlideClusterClientConfiguration::with_address("127.0.0.1", self.ports[0])
             .protocol(protocol)
             .request_timeout(Duration::from_secs(5));
-        GlideClusterClient::connect(config).await.ok()
+        let client = GlideClusterClient::connect(config).await.ok()?;
+        // Converge the connection map before handing the client to a test: right
+        // after a cluster forms, the client's topology snapshot can lag, so the
+        // first routed op may hit a `MOVED` to a not-yet-connected node
+        // (`ConnectionNotFoundForRoute`). A retried broadcast PING forces the
+        // client to connect to every primary, eliminating that startup race.
+        warm_up_cluster(&client).await;
+        Some(client)
     }
 
     /// Connect a cluster client with the default protocol (RESP3).
@@ -706,6 +713,65 @@ pub fn shared_cluster() -> Option<&'static ClusterHarness> {
     CLUSTER
         .get_or_init(|| ClusterHarness::start_native(3))
         .as_ref()
+}
+
+/// Whether an error is a *transient* cluster-topology error — the kind that can
+/// occur while a freshly-formed cluster client's slot→node connection map is
+/// still converging. Right after a cluster forms, a command can hit a `MOVED`
+/// redirect to a node not yet in the connection map, surfacing as
+/// `ConnectionNotFoundForRoute`; a topology refresh is triggered but the
+/// in-flight op fails. These are safe to retry.
+pub fn is_transient_cluster_error(e: &glide::GlideError) -> bool {
+    let m = e.to_string();
+    m.contains("ConnectionNotFoundForRoute")
+        || m.contains("Requested connection not found")
+        || m.contains("connection map")
+        || m.contains("MOVED")
+        || m.contains("Moved")
+}
+
+/// Force a freshly-connected cluster client to connect to every primary so its
+/// slot→node connection map is fully populated before a test issues routed or
+/// scan commands. Best-effort: retries a broadcast `PING` on transient topology
+/// errors, and returns once it succeeds (or after a bounded number of attempts /
+/// on a non-transient error, leaving the test to surface any real problem).
+async fn warm_up_cluster(client: &GlideClusterClient) {
+    for attempt in 0..20u32 {
+        let mut ping = redis::Cmd::new();
+        ping.arg("PING");
+        match client.route_command(ping, Route::AllPrimaries).await {
+            Ok(_) => return,
+            Err(e) if is_transient_cluster_error(&e) => {
+                tokio::time::sleep(Duration::from_millis(50 * (attempt + 1) as u64)).await;
+            }
+            Err(_) => return,
+        }
+    }
+}
+
+/// Retry a cluster operation on transient topology errors (see
+/// [`is_transient_cluster_error`]) with bounded exponential-ish backoff.
+///
+/// Usage (pass the future *without* `.await` — the macro awaits internally):
+/// ```ignore
+/// let (next, keys) = retry_transient!(client.cluster_scan(&cursor, None, Some(100), None)).unwrap();
+/// ```
+#[macro_export]
+macro_rules! retry_transient {
+    ($op:expr) => {{
+        let mut __attempt: u32 = 0;
+        loop {
+            match $op.await {
+                Ok(v) => break Ok::<_, glide::GlideError>(v),
+                Err(e) if __attempt < 15 && $crate::common::is_transient_cluster_error(&e) => {
+                    __attempt += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(50 * __attempt as u64))
+                        .await;
+                }
+                Err(e) => break Err(e),
+            }
+        }
+    }};
 }
 
 /// Start a standalone server, or `return` from the test (printing SKIP) when no

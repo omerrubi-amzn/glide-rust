@@ -120,10 +120,8 @@ async fn cluster_scan_iterates_all_keys() {
     let mut cursor = ClusterScanCursor::new();
     let mut guard = 0;
     loop {
-        let (next, keys) = client
-            .cluster_scan(&cursor, None, Some(100), None)
-            .await
-            .unwrap();
+        let (next, keys) =
+            retry_transient!(client.cluster_scan(&cursor, None, Some(100), None)).unwrap();
         for k in keys {
             found.insert(k.to_vec());
         }
@@ -157,10 +155,13 @@ async fn cluster_scan_with_match_pattern() {
     let mut cursor = ClusterScanCursor::new();
     let mut guard = 0;
     loop {
-        let (next, keys) = client
-            .cluster_scan(&cursor, Some(pattern.as_bytes()), Some(100), None)
-            .await
-            .unwrap();
+        let (next, keys) = retry_transient!(client.cluster_scan(
+            &cursor,
+            Some(pattern.as_bytes()),
+            Some(100),
+            None
+        ))
+        .unwrap();
         found.extend(keys.into_iter().map(|k| k.to_vec()));
         cursor = next;
         guard += 1;
