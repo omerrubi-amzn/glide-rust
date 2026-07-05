@@ -1,11 +1,10 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
 //! Pub/Sub integration tests (RESP2 + RESP3).
 //!
-//! The wrapper does not yet expose a typed subscription API (glide-core is
-//! connected with `push_sender = None`, so pushed messages are not delivered to
-//! the client). We therefore exercise the publish side and PUBSUB introspection
-//! via `custom_command`, which is fully functional, and document the receive
-//! path as a graceful SKIP.
+//! Covers the publish side and `PUBSUB` introspection via `custom_command`, plus
+//! the runtime subscribe/receive path: with the push channel enabled
+//! (`enable_pubsub()` or connect-time `subscriptions`), `subscribe`/`psubscribe`
+//! deliver messages through `get_pubsub_message`.
 
 mod common;
 
@@ -47,9 +46,115 @@ resp_test!(spublish_no_subscribers, c, {
 });
 
 #[tokio::test]
-async fn subscribe_receive_path_skipped() {
-    // The typed subscribe/receive path requires wiring glide-core's push_sender,
-    // which the wrapper does not expose yet. Documented as a SKIP so the intent
-    // is tracked without a spurious failure.
-    eprintln!("SKIP: typed pub/sub receive path not yet exposed by the wrapper");
+async fn runtime_subscribe_receives_then_unsubscribe() {
+    use glide::commands::pubsub::PubSubCommands;
+    use glide::{GlideClient, GlideClientConfiguration};
+    use std::time::Duration;
+
+    let srv = match common::TestServer::start() {
+        Some(s) => s,
+        None => {
+            eprintln!("SKIP: no valkey-server binary available");
+            return;
+        }
+    };
+    let chan = common::key("rt-chan");
+
+    // A client with the push channel enabled but NO connect-time subscriptions.
+    let subscriber = GlideClient::connect(
+        GlideClientConfiguration::with_address("127.0.0.1", srv.port).enable_pubsub(),
+    )
+    .await
+    .expect("connect subscriber");
+
+    // Subscribe at runtime, then publish from a second client.
+    subscriber.subscribe(&[chan.as_str()]).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let publisher = srv.client().await;
+    let n = publisher.publish(&chan, "runtime-hello").await.unwrap();
+    assert!(n >= 1, "expected >=1 subscriber, got {n}");
+
+    let msg = tokio::time::timeout(Duration::from_secs(3), subscriber.get_pubsub_message())
+        .await
+        .expect("timed out waiting for runtime-subscribed message")
+        .expect("receive error");
+    assert_eq!(msg.channel.as_ref(), chan.as_bytes());
+    assert_eq!(msg.payload.as_ref(), b"runtime-hello");
+
+    // Unsubscribe; subsequent publishes should not be received by us.
+    subscriber.unsubscribe(&[chan.as_str()]).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let n2 = publisher.publish(&chan, "after-unsub").await.unwrap();
+    assert_eq!(n2, 0, "no subscribers should remain after unsubscribe");
+}
+
+#[tokio::test]
+async fn runtime_psubscribe_pattern_receive() {
+    use glide::commands::pubsub::PubSubCommands;
+    use glide::{GlideClient, GlideClientConfiguration, PubSubMessageKind};
+    use std::time::Duration;
+
+    let srv = match common::TestServer::start() {
+        Some(s) => s,
+        None => {
+            eprintln!("SKIP: no valkey-server binary available");
+            return;
+        }
+    };
+    let subscriber = GlideClient::connect(
+        GlideClientConfiguration::with_address("127.0.0.1", srv.port).enable_pubsub(),
+    )
+    .await
+    .expect("connect subscriber");
+
+    subscriber.psubscribe(&["news.*"]).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let publisher = srv.client().await;
+    publisher.publish("news.tech", "breaking").await.unwrap();
+
+    let msg = tokio::time::timeout(Duration::from_secs(3), subscriber.get_pubsub_message())
+        .await
+        .expect("timed out")
+        .expect("receive error");
+    assert_eq!(msg.kind, PubSubMessageKind::PMessage);
+    assert_eq!(msg.channel.as_ref(), b"news.tech");
+    assert_eq!(msg.pattern.as_deref(), Some(&b"news.*"[..]));
+}
+
+#[tokio::test]
+async fn runtime_unsubscribe_all_stops_delivery() {
+    use glide::commands::pubsub::PubSubCommands;
+    use glide::{GlideClient, GlideClientConfiguration};
+    use std::time::Duration;
+
+    let srv = match common::TestServer::start() {
+        Some(s) => s,
+        None => {
+            eprintln!("SKIP: no valkey-server binary available");
+            return;
+        }
+    };
+    let c1 = common::key("uc1");
+    let c2 = common::key("uc2");
+    let subscriber = GlideClient::connect(
+        GlideClientConfiguration::with_address("127.0.0.1", srv.port).enable_pubsub(),
+    )
+    .await
+    .expect("connect subscriber");
+
+    subscriber
+        .subscribe(&[c1.as_str(), c2.as_str()])
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let publisher = srv.client().await;
+    assert!(publisher.publish(&c1, "x").await.unwrap() >= 1);
+
+    // Unsubscribe from ALL exact channels (empty slice).
+    subscriber.unsubscribe(&[] as &[&str]).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(publisher.publish(&c1, "y").await.unwrap(), 0);
+    assert_eq!(publisher.publish(&c2, "z").await.unwrap(), 0);
 }

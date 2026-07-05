@@ -65,3 +65,45 @@ async fn pubsub_shard_variants() {
     m.assert_args(&["PUBSUB", "SHARDNUMSUB", "s"]);
     assert_eq!(subs, vec![(Bytes::from_static(b"s"), 1)]);
 }
+
+#[tokio::test]
+async fn subscribe_encodes_channels() {
+    let m = Mock::nil();
+    m.subscribe(&["c1", "c2"]).await.unwrap();
+    m.assert_args(&["SUBSCRIBE", "c1", "c2"]);
+}
+
+#[tokio::test]
+async fn psubscribe_encodes_patterns() {
+    let m = Mock::nil();
+    m.psubscribe(&["news.*"]).await.unwrap();
+    m.assert_args(&["PSUBSCRIBE", "news.*"]);
+}
+
+#[tokio::test]
+async fn ssubscribe_encodes_channels() {
+    let m = Mock::nil();
+    m.ssubscribe(&["shard1"]).await.unwrap();
+    m.assert_args(&["SSUBSCRIBE", "shard1"]);
+}
+
+#[tokio::test]
+async fn unsubscribe_all_has_no_channel_args() {
+    let m = Mock::nil();
+    m.unsubscribe(&[] as &[&str]).await.unwrap();
+    m.assert_args(&["UNSUBSCRIBE"]);
+}
+
+#[tokio::test]
+async fn punsubscribe_specific() {
+    let m = Mock::nil();
+    m.punsubscribe(&["news.*"]).await.unwrap();
+    m.assert_args(&["PUNSUBSCRIBE", "news.*"]);
+}
+
+#[tokio::test]
+async fn sunsubscribe_all() {
+    let m = Mock::nil();
+    m.sunsubscribe(&[] as &[&str]).await.unwrap();
+    m.assert_args(&["SUNSUBSCRIBE"]);
+}

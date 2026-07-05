@@ -10,6 +10,63 @@ use crate::error::{GlideError, Result};
 use glide_core::client::Client as CoreClient;
 use redis::cluster_routing::RoutingInfo;
 use redis::{Cmd, Pipeline, PipelineRetryStrategy, ToRedisArgs, Value};
+use std::time::Duration;
+
+/// Execution options for a [`Batch`].
+///
+/// Mirrors Python's `BaseBatchOptions` / `BatchRetryStrategy`. The `retry_*`
+/// flags apply only to **non-atomic pipelines**; they are ignored for atomic
+/// transactions (a `MULTI`/`EXEC` is never partially retried).
+///
+/// Retrying is only safe for idempotent commands — enabling it for a pipeline
+/// that contains non-idempotent commands (e.g. `INCR`, `LPUSH`) may apply them
+/// more than once on a reconnect. Both flags default to `false`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BatchOptions {
+    /// Per-batch timeout. `None` uses the client's configured request timeout.
+    pub timeout: Option<Duration>,
+    /// Retry the pipeline if the server returns a retryable error (pipeline only).
+    pub retry_server_error: bool,
+    /// Retry the pipeline on a connection error (pipeline only).
+    pub retry_connection_error: bool,
+}
+
+impl BatchOptions {
+    /// Options with no timeout override and retries disabled (the defaults).
+    pub fn new() -> Self {
+        BatchOptions::default()
+    }
+
+    /// Set a per-batch timeout. Builder form.
+    #[must_use]
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    /// Enable/disable retrying the pipeline on a retryable server error
+    /// (pipeline only). Builder form.
+    #[must_use]
+    pub fn with_retry_server_error(mut self, retry: bool) -> Self {
+        self.retry_server_error = retry;
+        self
+    }
+
+    /// Enable/disable retrying the pipeline on a connection error (pipeline
+    /// only). Builder form.
+    #[must_use]
+    pub fn with_retry_connection_error(mut self, retry: bool) -> Self {
+        self.retry_connection_error = retry;
+        self
+    }
+
+    /// Timeout as whole milliseconds, saturating at `u32::MAX` (~49.7 days)
+    /// instead of narrowing/overflowing.
+    fn timeout_millis(&self) -> Option<u32> {
+        self.timeout
+            .map(|d| u32::try_from(d.as_millis()).unwrap_or(u32::MAX))
+    }
+}
 
 /// A queued sequence of commands executed together.
 ///
@@ -119,14 +176,16 @@ pub(crate) async fn run_batch(
     batch: &Batch,
     routing: Option<RoutingInfo>,
     raise_on_error: bool,
+    options: &BatchOptions,
 ) -> Result<Vec<Value>> {
     if batch.is_empty() {
         return Ok(Vec::new());
     }
+    let timeout = options.timeout_millis();
     let mut client = core.clone();
     let value = if batch.is_atomic {
         client
-            .send_transaction(batch.pipeline(), routing, None, raise_on_error)
+            .send_transaction(batch.pipeline(), routing, timeout, raise_on_error)
             .await
             .map_err(GlideError::from)?
     } else {
@@ -135,10 +194,10 @@ pub(crate) async fn run_batch(
                 batch.pipeline(),
                 routing,
                 raise_on_error,
-                None,
+                timeout,
                 PipelineRetryStrategy {
-                    retry_server_error: false,
-                    retry_connection_error: false,
+                    retry_server_error: options.retry_server_error,
+                    retry_connection_error: options.retry_connection_error,
                 },
             )
             .await

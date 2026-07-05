@@ -222,3 +222,46 @@ matrix_test!(zset_wrong_type_errors, c, {
     c.set(&k, "notazset").await.unwrap();
     assert_request_error!(c.zadd(&k, &[("a", 1.0)]).await);
 });
+
+matrix_test!(zrangestore_by_score_stores_count, c, {
+    let src = common::tkey("zrss", "src");
+    let dst = common::tkey("zrss", "dst");
+    c.zadd(&src, &[("a", 1.0), ("b", 2.0), ("c", 3.0)])
+        .await
+        .unwrap();
+    let n = c
+        .zrangestore_by_score(
+            &dst,
+            &src,
+            ScoreBound::Inclusive(1.0),
+            ScoreBound::Inclusive(2.0),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(n, 2);
+    assert_eq!(c.zcard(&dst).await.unwrap(), 2);
+});
+
+matrix_test!(zrangestore_by_lex_stores_count, c, {
+    let src = common::tkey("zrsl", "src");
+    let dst = common::tkey("zrsl", "dst");
+    // Equal scores => well-defined lexicographic ordering.
+    c.zadd(&src, &[("a", 0.0), ("b", 0.0), ("c", 0.0)])
+        .await
+        .unwrap();
+    let n = c
+        .zrangestore_by_lex(
+            &dst,
+            &src,
+            &LexBound::NegativeInfinity,
+            &LexBound::PositiveInfinity,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(n, 3);
+    assert_eq!(c.zcard(&dst).await.unwrap(), 3);
+});

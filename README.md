@@ -25,6 +25,16 @@ GLIDE binding.
 - **`custom_command` escape hatch** — run *any* command (with optional cluster
   routing) even where a typed wrapper is not provided, guaranteeing 100%
   functional coverage.
+- **Batching** — pipelines and `MULTI`/`EXEC` transactions with configurable
+  [`BatchOptions`] (per-batch timeout and pipeline retry strategy).
+- **Dynamic authentication** — rotate the connection password at runtime with
+  `update_connection_password`, or use **AWS IAM** auth (ElastiCache / MemoryDB)
+  via `ServerCredentials::iam`.
+- **Runtime Pub/Sub** — `subscribe`/`psubscribe`/`ssubscribe` (and the matching
+  unsubscribes) in addition to connect-time subscriptions; messages arrive via
+  `get_pubsub_message`.
+- **OpenTelemetry** — export traces and metrics via the `glide::telemetry`
+  module (gRPC / HTTP / file exporters).
 - **Feature parity with the Python GLIDE wrapper** as the baseline for both the
   API surface and the test suite.
 

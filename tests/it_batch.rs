@@ -7,7 +7,7 @@
 
 mod common;
 
-use glide::{Batch, CustomCommand, StringCommands};
+use glide::{Batch, BatchOptions, CustomCommand, StringCommands};
 
 #[tokio::test]
 async fn atomic_transaction_ordered_results() {
@@ -264,4 +264,39 @@ async fn cluster_non_atomic_pipeline() {
     assert_eq!(r.len(), 4);
     assert_eq!(glide::value::to_string(r[2].clone()).unwrap(), "1");
     assert_eq!(glide::value::to_string(r[3].clone()).unwrap(), "2");
+}
+
+#[tokio::test]
+async fn pipeline_with_batch_options_timeout_and_retry() {
+    let srv = server_or_skip!();
+    let c = srv.client().await;
+    let k = common::key("bopt");
+
+    let mut batch = Batch::new(false);
+    batch.set(&k, "1").incr(&k).get(&k);
+
+    let opts = BatchOptions::new()
+        .with_timeout(std::time::Duration::from_secs(5))
+        .with_retry_server_error(true)
+        .with_retry_connection_error(false);
+
+    let results = c.exec_with_options(&batch, true, &opts).await.unwrap();
+    assert_eq!(results.len(), 3);
+    assert_eq!(glide::value::to_i64(results[1].clone()).unwrap(), 2);
+    assert_eq!(glide::value::to_string(results[2].clone()).unwrap(), "2");
+}
+
+#[tokio::test]
+async fn transaction_with_batch_options_timeout() {
+    let srv = server_or_skip!();
+    let c = srv.client().await;
+    let k = common::key("btx");
+
+    let mut batch = Batch::new(true);
+    batch.set(&k, "5").incr(&k).get(&k);
+
+    let opts = BatchOptions::new().with_timeout(std::time::Duration::from_secs(5));
+    let results = c.exec_with_options(&batch, true, &opts).await.unwrap();
+    assert_eq!(results.len(), 3);
+    assert_eq!(glide::value::to_string(results[2].clone()).unwrap(), "6");
 }

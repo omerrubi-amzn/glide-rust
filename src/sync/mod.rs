@@ -8,7 +8,7 @@
 //! (and the cluster equivalent), and the most common commands also have direct
 //! blocking methods.
 
-use crate::batch::Batch;
+use crate::batch::{Batch, BatchOptions};
 use crate::client::{GlideClient, GlideClusterClient};
 use crate::commands::options::SetOptions;
 use crate::commands::prelude::*;
@@ -77,6 +77,29 @@ impl SyncGlideClient {
     /// Execute a [`Batch`] (blocking).
     pub fn exec(&self, batch: &Batch, raise_on_error: bool) -> Result<Vec<Value>> {
         runtime().block_on(self.inner.exec(batch, raise_on_error))
+    }
+
+    /// Execute a [`Batch`] with explicit [`BatchOptions`] (blocking).
+    pub fn exec_with_options(
+        &self,
+        batch: &Batch,
+        raise_on_error: bool,
+        options: &BatchOptions,
+    ) -> Result<Vec<Value>> {
+        runtime().block_on(self.inner.exec_with_options(batch, raise_on_error, options))
+    }
+
+    /// Update the connection password (blocking). See
+    /// [`GlideClient::update_connection_password`].
+    pub fn update_connection_password(
+        &self,
+        password: Option<String>,
+        immediate_auth: bool,
+    ) -> Result<()> {
+        runtime().block_on(
+            self.inner
+                .update_connection_password(password, immediate_auth),
+        )
     }
 
     /// Run an arbitrary command (blocking escape hatch).
@@ -182,6 +205,33 @@ impl SyncGlideClusterClient {
         route: Option<Route>,
     ) -> Result<Vec<Value>> {
         runtime().block_on(self.inner.exec(batch, raise_on_error, route))
+    }
+
+    /// Execute a [`Batch`] with explicit [`BatchOptions`] (blocking).
+    pub fn exec_with_options(
+        &self,
+        batch: &Batch,
+        raise_on_error: bool,
+        route: Option<Route>,
+        options: &BatchOptions,
+    ) -> Result<Vec<Value>> {
+        runtime().block_on(
+            self.inner
+                .exec_with_options(batch, raise_on_error, route, options),
+        )
+    }
+
+    /// Update the connection password (blocking). See
+    /// [`GlideClusterClient::update_connection_password`].
+    pub fn update_connection_password(
+        &self,
+        password: Option<String>,
+        immediate_auth: bool,
+    ) -> Result<()> {
+        runtime().block_on(
+            self.inner
+                .update_connection_password(password, immediate_auth),
+        )
     }
 
     /// Blocking `PING`.

@@ -6,9 +6,10 @@
 //! structs that lower into a `glide_core::client::ConnectionRequest`.
 
 use glide_core::client::{
-    AuthenticationInfo, ConnectionRequest, ConnectionRetryStrategy, NodeAddress as CoreNodeAddress,
-    PeriodicCheck, ReadFrom as CoreReadFrom, TlsMode,
+    AuthenticationInfo, ConnectionRequest, ConnectionRetryStrategy, IamAuthenticationConfig,
+    NodeAddress as CoreNodeAddress, PeriodicCheck, ReadFrom as CoreReadFrom, TlsMode,
 };
+use glide_core::iam::ServiceType as CoreServiceType;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
@@ -168,12 +169,18 @@ impl From<NodeAddress> for CoreNodeAddress {
 /// Username/password credentials.
 ///
 /// Mirrors Python `ServerCredentials`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct ServerCredentials {
-    /// Optional username (ACL). If omitted, the default user is used.
+    /// Optional username (ACL). If omitted, the default user is used. Required
+    /// when [`Self::iam_config`] is set.
     pub username: Option<String>,
-    /// Password.
-    pub password: String,
+    /// Password for traditional authentication. Ignored when IAM is configured
+    /// and available (IAM acts as the password source); may still be set as a
+    /// fallback.
+    pub password: Option<String>,
+    /// AWS IAM authentication configuration. When set, IAM takes precedence over
+    /// [`Self::password`].
+    pub iam_config: Option<IamAuthConfig>,
 }
 
 impl ServerCredentials {
@@ -181,7 +188,8 @@ impl ServerCredentials {
     pub fn password(password: impl Into<String>) -> Self {
         ServerCredentials {
             username: None,
-            password: password.into(),
+            password: Some(password.into()),
+            iam_config: None,
         }
     }
 
@@ -189,7 +197,116 @@ impl ServerCredentials {
     pub fn new(username: impl Into<String>, password: impl Into<String>) -> Self {
         ServerCredentials {
             username: Some(username.into()),
-            password: password.into(),
+            password: Some(password.into()),
+            iam_config: None,
+        }
+    }
+
+    /// AWS IAM credentials for ElastiCache/MemoryDB. `username` is the IAM user
+    /// and is required; the token is signed and refreshed automatically by the
+    /// core. Mirrors Python's IAM `ServerCredentials`.
+    pub fn iam(username: impl Into<String>, iam_config: IamAuthConfig) -> Self {
+        ServerCredentials {
+            username: Some(username.into()),
+            password: None,
+            iam_config: Some(iam_config),
+        }
+    }
+
+    /// Set a fallback password (used when IAM is unavailable). Builder form.
+    #[must_use]
+    pub fn with_password(mut self, password: impl Into<String>) -> Self {
+        self.password = Some(password.into());
+        self
+    }
+
+    pub(crate) fn to_core(&self) -> AuthenticationInfo {
+        AuthenticationInfo {
+            username: self.username.clone(),
+            password: self.password.clone(),
+            iam_config: self.iam_config.as_ref().map(IamAuthConfig::to_core),
+        }
+    }
+}
+
+impl std::fmt::Debug for ServerCredentials {
+    /// Redacts the password so it never leaks through `{:?}` (including via the
+    /// containing configuration's derived `Debug`).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerCredentials")
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("iam_config", &self.iam_config)
+            .finish()
+    }
+}
+
+/// AWS service backing IAM authentication.
+///
+/// Mirrors Python's IAM `ServiceType`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServiceType {
+    /// Amazon ElastiCache.
+    ElastiCache,
+    /// Amazon MemoryDB.
+    MemoryDB,
+}
+
+impl From<ServiceType> for CoreServiceType {
+    fn from(s: ServiceType) -> Self {
+        match s {
+            ServiceType::ElastiCache => CoreServiceType::ElastiCache,
+            ServiceType::MemoryDB => CoreServiceType::MemoryDB,
+        }
+    }
+}
+
+/// AWS IAM authentication configuration for ElastiCache/MemoryDB.
+///
+/// The core resolves AWS credentials, signs a SigV4 auth token, and refreshes it
+/// automatically (default every 14 minutes). Mirrors Python's IAM config.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IamAuthConfig {
+    /// AWS ElastiCache or MemoryDB cluster name.
+    pub cluster_name: String,
+    /// AWS region of the cluster (e.g. `us-east-1`).
+    pub region: String,
+    /// Which AWS service backs the cluster.
+    pub service_type: ServiceType,
+    /// Token refresh interval in seconds (1s–12h). `None` uses the core default
+    /// (14 minutes).
+    pub refresh_interval_seconds: Option<u32>,
+}
+
+impl IamAuthConfig {
+    /// Create an IAM config for the given cluster, region, and service, using the
+    /// default refresh interval.
+    pub fn new(
+        cluster_name: impl Into<String>,
+        region: impl Into<String>,
+        service_type: ServiceType,
+    ) -> Self {
+        IamAuthConfig {
+            cluster_name: cluster_name.into(),
+            region: region.into(),
+            service_type,
+            refresh_interval_seconds: None,
+        }
+    }
+
+    /// Override the token refresh interval (seconds). Builder form.
+    #[must_use]
+    pub fn with_refresh_interval_seconds(mut self, seconds: u32) -> Self {
+        self.refresh_interval_seconds = Some(seconds);
+        self
+    }
+
+    fn to_core(&self) -> IamAuthenticationConfig {
+        IamAuthenticationConfig {
+            cluster_name: self.cluster_name.clone(),
+            region: self.region.clone(),
+            service_type: self.service_type.into(),
+            refresh_interval_seconds: self.refresh_interval_seconds,
         }
     }
 }
@@ -300,6 +417,10 @@ pub struct GlideClientConfiguration {
     pub lazy_connect: bool,
     /// Pub/Sub subscriptions to establish on connect.
     pub pubsub_subscriptions: Option<PubSubSubscriptions>,
+    /// Force creation of the Pub/Sub push channel even when no subscriptions are
+    /// configured, so runtime `subscribe`/`unsubscribe` can receive messages.
+    /// See [`crate::commands::pubsub::PubSubCommands`].
+    pub force_pubsub_channel: bool,
     /// Custom CA certificate(s) (PEM bytes) to trust when verifying the server
     /// under [`TlsConfig::SecureTls`]. Lowered into
     /// `ConnectionRequest::root_certs`. Empty = use the system trust store.
@@ -323,6 +444,7 @@ impl GlideClientConfiguration {
             inflight_requests_limit: None,
             lazy_connect: false,
             pubsub_subscriptions: None,
+            force_pubsub_channel: false,
             root_certs: Vec::new(),
         }
     }
@@ -401,6 +523,19 @@ impl GlideClientConfiguration {
         self
     }
 
+    /// Enable the Pub/Sub push channel without configuring any connect-time
+    /// subscriptions, so the client can use runtime `subscribe`/`unsubscribe`
+    /// and receive messages via `get_pubsub_message`. Connect-time
+    /// `subscriptions` enable this implicitly.
+    ///
+    /// Note: runtime subscriptions are session-scoped — unlike connect-time
+    /// subscriptions they are not automatically restored after a reconnect.
+    #[must_use]
+    pub fn enable_pubsub(mut self) -> Self {
+        self.force_pubsub_channel = true;
+        self
+    }
+
     pub(crate) fn to_request(&self) -> ConnectionRequest {
         let mut req = base_request(
             &self.addresses,
@@ -456,6 +591,10 @@ pub struct GlideClusterClientConfiguration {
     pub lazy_connect: bool,
     /// Pub/Sub subscriptions to establish on connect.
     pub pubsub_subscriptions: Option<PubSubSubscriptions>,
+    /// Force creation of the Pub/Sub push channel even when no subscriptions are
+    /// configured, so runtime `subscribe`/`unsubscribe` can receive messages.
+    /// See [`crate::commands::pubsub::PubSubCommands`].
+    pub force_pubsub_channel: bool,
     /// Custom CA certificate(s) (PEM bytes) to trust when verifying the server
     /// under [`TlsConfig::SecureTls`]. Lowered into
     /// `ConnectionRequest::root_certs`. Empty = use the system trust store.
@@ -479,6 +618,7 @@ impl GlideClusterClientConfiguration {
             inflight_requests_limit: None,
             lazy_connect: false,
             pubsub_subscriptions: None,
+            force_pubsub_channel: false,
             root_certs: Vec::new(),
         }
     }
@@ -555,6 +695,19 @@ impl GlideClusterClientConfiguration {
         self
     }
 
+    /// Enable the Pub/Sub push channel without configuring any connect-time
+    /// subscriptions, so the client can use runtime `subscribe`/`unsubscribe`
+    /// and receive messages via `get_pubsub_message`. Connect-time
+    /// `subscriptions` enable this implicitly.
+    ///
+    /// Note: runtime subscriptions are session-scoped — unlike connect-time
+    /// subscriptions they are not automatically restored after a reconnect.
+    #[must_use]
+    pub fn enable_pubsub(mut self) -> Self {
+        self.force_pubsub_channel = true;
+        self
+    }
+
     pub(crate) fn to_request(&self) -> ConnectionRequest {
         let mut req = base_request(
             &self.addresses,
@@ -624,11 +777,7 @@ fn base_request(
     }
 
     if let Some(creds) = credentials {
-        req.authentication_info = Some(AuthenticationInfo {
-            username: creds.username.clone(),
-            password: Some(creds.password.clone()),
-            iam_config: None,
-        });
+        req.authentication_info = Some(creds.to_core());
     }
 
     if let Some(t) = request_timeout {
@@ -949,6 +1098,121 @@ mod tests {
         let auth = req.authentication_info.expect("auth set");
         assert_eq!(auth.username.as_deref(), Some("u"));
         assert_eq!(auth.password.as_deref(), Some("p"));
+    }
+
+    // ---- IAM authentication ---------------------------------------------
+
+    #[test]
+    fn iam_credentials_elasticache_lower_correctly() {
+        let req = GlideClientConfiguration::with_address("h", 1)
+            .credentials(ServerCredentials::iam(
+                "iam-user",
+                IamAuthConfig::new("my-cluster", "us-east-1", ServiceType::ElastiCache),
+            ))
+            .to_request();
+        let auth = req.authentication_info.expect("auth set");
+        assert_eq!(auth.username.as_deref(), Some("iam-user"));
+        // IAM-only: no static password.
+        assert!(auth.password.is_none());
+        let iam = auth.iam_config.expect("iam config set");
+        assert_eq!(iam.cluster_name, "my-cluster");
+        assert_eq!(iam.region, "us-east-1");
+        assert_eq!(iam.service_type, CoreServiceType::ElastiCache);
+        assert_eq!(iam.refresh_interval_seconds, None);
+    }
+
+    #[test]
+    fn iam_credentials_memorydb_with_refresh_interval() {
+        let req = GlideClientConfiguration::with_address("h", 1)
+            .credentials(ServerCredentials::iam(
+                "u",
+                IamAuthConfig::new("c", "eu-west-1", ServiceType::MemoryDB)
+                    .with_refresh_interval_seconds(300),
+            ))
+            .to_request();
+        let iam = req
+            .authentication_info
+            .expect("auth set")
+            .iam_config
+            .expect("iam set");
+        assert_eq!(iam.service_type, CoreServiceType::MemoryDB);
+        assert_eq!(iam.region, "eu-west-1");
+        assert_eq!(iam.refresh_interval_seconds, Some(300));
+    }
+
+    #[test]
+    fn iam_with_fallback_password_keeps_both() {
+        // IAM takes precedence at auth time, but a fallback password may still be
+        // provided and must be lowered alongside the IAM config.
+        let creds = ServerCredentials::iam(
+            "u",
+            IamAuthConfig::new("c", "us-west-2", ServiceType::ElastiCache),
+        )
+        .with_password("fallback");
+        let req = GlideClientConfiguration::with_address("h", 1)
+            .credentials(creds)
+            .to_request();
+        let auth = req.authentication_info.expect("auth set");
+        assert_eq!(auth.password.as_deref(), Some("fallback"));
+        assert!(auth.iam_config.is_some());
+    }
+
+    #[test]
+    fn iam_credentials_apply_to_cluster() {
+        let req = GlideClusterClientConfiguration::with_address("h", 1)
+            .credentials(ServerCredentials::iam(
+                "u",
+                IamAuthConfig::new("c", "ap-south-1", ServiceType::MemoryDB),
+            ))
+            .to_request();
+        let iam = req
+            .authentication_info
+            .expect("auth set")
+            .iam_config
+            .expect("iam set");
+        assert_eq!(iam.region, "ap-south-1");
+        assert_eq!(iam.service_type, CoreServiceType::MemoryDB);
+    }
+
+    #[test]
+    fn non_iam_credentials_have_no_iam_config() {
+        let req = GlideClientConfiguration::with_address("h", 1)
+            .credentials(ServerCredentials::password("p"))
+            .to_request();
+        assert!(
+            req.authentication_info
+                .expect("auth set")
+                .iam_config
+                .is_none()
+        );
+    }
+
+    // ---- runtime pub/sub opt-in ------------------------------------------
+
+    #[test]
+    fn enable_pubsub_sets_flag_standalone() {
+        let cfg = GlideClientConfiguration::with_address("h", 1);
+        assert!(!cfg.force_pubsub_channel);
+        assert!(cfg.enable_pubsub().force_pubsub_channel);
+    }
+
+    #[test]
+    fn enable_pubsub_sets_flag_cluster() {
+        let cfg = GlideClusterClientConfiguration::with_address("h", 1);
+        assert!(!cfg.force_pubsub_channel);
+        assert!(cfg.enable_pubsub().force_pubsub_channel);
+    }
+
+    #[test]
+    fn credentials_debug_redacts_password() {
+        let creds = ServerCredentials::new("alice", "super-secret");
+        let shown = format!("{creds:?}");
+        assert!(!shown.contains("super-secret"), "password leaked: {shown}");
+        assert!(shown.contains("<redacted>"));
+        assert!(shown.contains("alice"));
+        // And transitively through the configuration's Debug.
+        let cfg = GlideClientConfiguration::with_address("h", 1).credentials(creds);
+        assert!(!format!("{cfg:?}").contains("super-secret"));
     }
 
     // ---- timeouts --------------------------------------------------------

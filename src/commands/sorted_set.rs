@@ -2,7 +2,7 @@
 //! Sorted-set commands. Mirrors Python's sorted-set command surface.
 #![allow(clippy::type_complexity)]
 
-use crate::commands::options::{ConditionalChange, UpdateOptions};
+use crate::commands::options::{ConditionalChange, Limit, UpdateOptions};
 use crate::error::Result;
 use crate::executor::CommandExecutor;
 use crate::value;
@@ -563,6 +563,73 @@ pub trait SortedSetCommands: CommandExecutor {
             .arg(stop);
         if rev {
             cmd.arg("REV");
+        }
+        value::to_i64(self.execute_command(cmd, None).await?)
+    }
+
+    /// Store into `destination` the members of the sorted set `source` whose
+    /// scores are within `[min, max]` (`ZRANGESTORE ... BYSCORE`), returning the
+    /// number of elements stored.
+    ///
+    /// When `rev` is `true` the range is interpreted in reverse (highest scores
+    /// first); the bounds are emitted in the order the server requires for `REV`.
+    /// `limit` applies an optional `LIMIT offset count`.
+    async fn zrangestore_by_score<D: ToRedisArgs + Send, S: ToRedisArgs + Send>(
+        &self,
+        destination: D,
+        source: S,
+        min: ScoreBound,
+        max: ScoreBound,
+        rev: bool,
+        limit: Option<Limit>,
+    ) -> Result<i64> {
+        // For a reverse range the server expects the high bound first.
+        let (first, second) = if rev { (max, min) } else { (min, max) };
+        let mut cmd = Cmd::new();
+        cmd.arg("ZRANGESTORE")
+            .arg(destination)
+            .arg(source)
+            .arg(first.to_arg())
+            .arg(second.to_arg())
+            .arg("BYSCORE");
+        if rev {
+            cmd.arg("REV");
+        }
+        if let Some(limit) = limit {
+            cmd.arg("LIMIT").arg(limit.offset).arg(limit.count);
+        }
+        value::to_i64(self.execute_command(cmd, None).await?)
+    }
+
+    /// Store into `destination` the members of the sorted set `source` whose
+    /// lexicographical values are within `[min, max]`
+    /// (`ZRANGESTORE ... BYLEX`), returning the number of elements stored.
+    ///
+    /// When `rev` is `true` the range is interpreted in reverse; the bounds are
+    /// emitted in the order the server requires for `REV`. `limit` applies an
+    /// optional `LIMIT offset count`.
+    async fn zrangestore_by_lex<D: ToRedisArgs + Send, S: ToRedisArgs + Send>(
+        &self,
+        destination: D,
+        source: S,
+        min: &LexBound,
+        max: &LexBound,
+        rev: bool,
+        limit: Option<Limit>,
+    ) -> Result<i64> {
+        let (first, second) = if rev { (max, min) } else { (min, max) };
+        let mut cmd = Cmd::new();
+        cmd.arg("ZRANGESTORE")
+            .arg(destination)
+            .arg(source)
+            .arg(first.to_arg())
+            .arg(second.to_arg())
+            .arg("BYLEX");
+        if rev {
+            cmd.arg("REV");
+        }
+        if let Some(limit) = limit {
+            cmd.arg("LIMIT").arg(limit.offset).arg(limit.count);
         }
         value::to_i64(self.execute_command(cmd, None).await?)
     }
