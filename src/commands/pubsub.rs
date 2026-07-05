@@ -16,6 +16,65 @@ use redis::{Cmd, ToRedisArgs};
 /// Pub/Sub commands (`PUBLISH`, `SPUBLISH`, `PUBSUB ...`).
 #[async_trait]
 pub trait PubSubCommands: CommandExecutor {
+    /// Subscribe to one or more exact channels at runtime (`SUBSCRIBE`).
+    ///
+    /// Received messages are delivered via `get_pubsub_message` /
+    /// `try_get_pubsub_message`. The client must have the Pub/Sub push channel
+    /// enabled — either by configuring connect-time `subscriptions` or by calling
+    /// `enable_pubsub()` on the configuration — otherwise messages are not
+    /// captured.
+    ///
+    /// Note: runtime subscriptions are session-scoped and are not automatically
+    /// restored after a reconnect (connect-time subscriptions are).
+    async fn subscribe<C: ToRedisArgs + Send + Sync>(&self, channels: &[C]) -> Result<()> {
+        self.pubsub_subscribe_impl("SUBSCRIBE", channels).await
+    }
+
+    /// Unsubscribe from exact channels (`UNSUBSCRIBE`). An empty slice
+    /// unsubscribes from all exact channels.
+    async fn unsubscribe<C: ToRedisArgs + Send + Sync>(&self, channels: &[C]) -> Result<()> {
+        self.pubsub_subscribe_impl("UNSUBSCRIBE", channels).await
+    }
+
+    /// Subscribe to one or more glob patterns at runtime (`PSUBSCRIBE`). See
+    /// [`Self::subscribe`] for delivery requirements.
+    async fn psubscribe<C: ToRedisArgs + Send + Sync>(&self, patterns: &[C]) -> Result<()> {
+        self.pubsub_subscribe_impl("PSUBSCRIBE", patterns).await
+    }
+
+    /// Unsubscribe from patterns (`PUNSUBSCRIBE`). An empty slice unsubscribes
+    /// from all patterns.
+    async fn punsubscribe<C: ToRedisArgs + Send + Sync>(&self, patterns: &[C]) -> Result<()> {
+        self.pubsub_subscribe_impl("PUNSUBSCRIBE", patterns).await
+    }
+
+    /// Subscribe to one or more shard channels at runtime (`SSUBSCRIBE`, cluster
+    /// only). See [`Self::subscribe`] for delivery requirements.
+    async fn ssubscribe<C: ToRedisArgs + Send + Sync>(&self, channels: &[C]) -> Result<()> {
+        self.pubsub_subscribe_impl("SSUBSCRIBE", channels).await
+    }
+
+    /// Unsubscribe from shard channels (`SUNSUBSCRIBE`). An empty slice
+    /// unsubscribes from all shard channels.
+    async fn sunsubscribe<C: ToRedisArgs + Send + Sync>(&self, channels: &[C]) -> Result<()> {
+        self.pubsub_subscribe_impl("SUNSUBSCRIBE", channels).await
+    }
+
+    #[doc(hidden)]
+    async fn pubsub_subscribe_impl<C: ToRedisArgs + Send + Sync>(
+        &self,
+        keyword: &'static str,
+        channels: &[C],
+    ) -> Result<()> {
+        let mut cmd = Cmd::new();
+        cmd.arg(keyword);
+        for c in channels {
+            cmd.arg(c);
+        }
+        self.execute_command(cmd, None).await?;
+        Ok(())
+    }
+
     /// Publish `message` to `channel` (`PUBLISH`). Returns the number of clients
     /// that received the message.
     async fn publish<C: ToRedisArgs + Send, M: ToRedisArgs + Send>(

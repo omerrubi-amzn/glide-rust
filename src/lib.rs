@@ -10,6 +10,7 @@ pub mod config;
 pub mod error;
 pub mod executor;
 pub mod routes;
+pub mod telemetry;
 pub mod value;
 
 #[cfg(feature = "sync")]
@@ -20,7 +21,7 @@ mod command_mock;
 
 // ---- Primary public API re-exports (mirror Python's top-level `glide` package) ----
 
-pub use batch::Batch;
+pub use batch::{Batch, BatchOptions};
 pub use client::{
     ClusterScanCursor, GlideClient, GlideClusterClient, PubSubMessage, PubSubMessageKind,
 };
@@ -29,9 +30,9 @@ pub use executor::{CommandExecutor, CustomCommand};
 pub use routes::{Route, SlotType};
 
 pub use config::{
-    BackoffStrategy, GlideClientConfiguration, GlideClusterClientConfiguration, NodeAddress,
-    NodeDiscoveryMode, PeriodicChecks, ProtocolVersion, PubSubChannelMode, PubSubSubscriptions,
-    ReadFrom, ServerCredentials, TlsConfig,
+    BackoffStrategy, GlideClientConfiguration, GlideClusterClientConfiguration, IamAuthConfig,
+    NodeAddress, NodeDiscoveryMode, PeriodicChecks, ProtocolVersion, PubSubChannelMode,
+    PubSubSubscriptions, ReadFrom, ServerCredentials, ServiceType, TlsConfig,
 };
 
 /// All command traits in one import.

@@ -4,6 +4,7 @@
 use crate::commands::options::{FlushMode, FunctionRestorePolicy};
 use crate::error::Result;
 use crate::executor::CommandExecutor;
+use crate::routes::Route;
 use crate::value;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -109,6 +110,49 @@ pub trait ScriptingCommands: CommandExecutor {
             cmd.arg(a);
         }
         self.execute_command(cmd, None).await
+    }
+
+    /// `FCALL` routed to specific cluster node(s) (`route`). Keyless function
+    /// calls are commonly invoked with an explicit route (e.g. `AllPrimaries`);
+    /// on a standalone client the route is ignored.
+    async fn fcall_route<K: ToRedisArgs + Send + Sync, A: ToRedisArgs + Send + Sync>(
+        &self,
+        function: &str,
+        keys: &[K],
+        args: &[A],
+        route: Route,
+    ) -> Result<Value> {
+        let mut cmd = Cmd::new();
+        cmd.arg("FCALL").arg(function).arg(keys.len());
+        for k in keys {
+            cmd.arg(k);
+        }
+        for a in args {
+            cmd.arg(a);
+        }
+        let routing = route.to_routing_info(Some(&cmd));
+        self.execute_command(cmd, Some(routing)).await
+    }
+
+    /// Read-only `FCALL_RO` routed to specific cluster node(s) (`route`). On a
+    /// standalone client the route is ignored.
+    async fn fcall_ro_route<K: ToRedisArgs + Send + Sync, A: ToRedisArgs + Send + Sync>(
+        &self,
+        function: &str,
+        keys: &[K],
+        args: &[A],
+        route: Route,
+    ) -> Result<Value> {
+        let mut cmd = Cmd::new();
+        cmd.arg("FCALL_RO").arg(function).arg(keys.len());
+        for k in keys {
+            cmd.arg(k);
+        }
+        for a in args {
+            cmd.arg(a);
+        }
+        let routing = route.to_routing_info(Some(&cmd));
+        self.execute_command(cmd, Some(routing)).await
     }
 
     /// Load a function library (`FUNCTION LOAD`); returns the library name.

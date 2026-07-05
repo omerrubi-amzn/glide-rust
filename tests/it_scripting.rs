@@ -3,7 +3,7 @@
 
 mod common;
 
-use glide::{ScriptingCommands, StringCommands};
+use glide::{CustomCommand, Route, ScriptingCommands, StringCommands};
 
 resp_test!(eval_returns_argv, c, {
     let result = c
@@ -68,3 +68,47 @@ resp_test!(eval_error_propagates, c, {
             .await
     );
 });
+
+#[tokio::test]
+async fn fcall_and_fcall_route_live() {
+    let srv = match common::TestServer::start() {
+        Some(s) => s,
+        None => {
+            eprintln!("SKIP: no valkey-server binary available");
+            return;
+        }
+    };
+    let c = srv.client().await;
+
+    // Load a tiny function library (idempotent via REPLACE). The `no-writes`
+    // flag is required so the read-only `FCALL_RO` variant is permitted.
+    let lib = "#!lua name=glidetestlib\n\
+               redis.register_function{function_name='gt_echo', \
+               callback=function(keys, args) return args[1] end, flags={'no-writes'}}";
+    if let Err(e) = c
+        .custom_command(&["FUNCTION", "LOAD", "REPLACE", lib])
+        .await
+    {
+        // FUNCTION requires Valkey/Redis >= 7.0; skip on older servers.
+        eprintln!("SKIP: FUNCTION LOAD unsupported: {e:?}");
+        return;
+    }
+
+    // Plain FCALL.
+    let r = c.fcall("gt_echo", &[] as &[&str], &["hi"]).await.unwrap();
+    assert_eq!(glide::value::to_string(r).unwrap(), "hi");
+
+    // Routed FCALL (route ignored on standalone, but the typed path must work).
+    let r = c
+        .fcall_route("gt_echo", &[] as &[&str], &["routed"], Route::RandomNode)
+        .await
+        .unwrap();
+    assert_eq!(glide::value::to_string(r).unwrap(), "routed");
+
+    // Read-only routed FCALL_RO.
+    let r = c
+        .fcall_ro_route("gt_echo", &[] as &[&str], &["ro"], Route::RandomNode)
+        .await
+        .unwrap();
+    assert_eq!(glide::value::to_string(r).unwrap(), "ro");
+}

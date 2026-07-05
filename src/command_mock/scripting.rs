@@ -141,3 +141,28 @@ async fn script_kill_and_show() {
     assert_eq!(m.script_show("abc123").await.unwrap().as_ref(), b"return 1");
     m.assert_args(&["SCRIPT", "SHOW", "abc123"]);
 }
+
+#[tokio::test]
+async fn fcall_route_encodes_and_routes() {
+    use crate::routes::Route;
+    let m = Mock::bulk("ok");
+    m.fcall_route("myfunc", &[] as &[&str], &["a1"], Route::AllPrimaries)
+        .await
+        .unwrap();
+    m.assert_args(&["FCALL", "myfunc", "0", "a1"]);
+    assert!(
+        m.routing().is_some(),
+        "route must be forwarded to the executor"
+    );
+}
+
+#[tokio::test]
+async fn fcall_ro_route_encodes_and_routes() {
+    use crate::routes::Route;
+    let m = Mock::bulk("ok");
+    m.fcall_ro_route("rofn", &["k1"], &[] as &[&str], Route::RandomNode)
+        .await
+        .unwrap();
+    m.assert_args(&["FCALL_RO", "rofn", "1", "k1"]);
+    assert!(m.routing().is_some());
+}

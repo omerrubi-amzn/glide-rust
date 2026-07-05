@@ -335,3 +335,85 @@ async fn bzpop_and_zmpop() {
         ))
     );
 }
+
+#[tokio::test]
+async fn zrangestore_by_score_forward_no_limit() {
+    let m = Mock::int(3);
+    let n = m
+        .zrangestore_by_score(
+            "d",
+            "s",
+            ScoreBound::Inclusive(1.0),
+            ScoreBound::Inclusive(5.0),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(n, 3);
+    m.assert_args(&["ZRANGESTORE", "d", "s", "1", "5", "BYSCORE"]);
+}
+
+#[tokio::test]
+async fn zrangestore_by_score_rev_swaps_bounds_and_limit() {
+    let m = Mock::int(2);
+    m.zrangestore_by_score(
+        "d",
+        "s",
+        ScoreBound::Inclusive(1.0),
+        ScoreBound::Inclusive(5.0),
+        true,
+        Some(crate::commands::options::Limit {
+            offset: 0,
+            count: 10,
+        }),
+    )
+    .await
+    .unwrap();
+    // REV => high bound emitted first, plus REV + LIMIT.
+    m.assert_args(&[
+        "ZRANGESTORE",
+        "d",
+        "s",
+        "5",
+        "1",
+        "BYSCORE",
+        "REV",
+        "LIMIT",
+        "0",
+        "10",
+    ]);
+}
+
+#[tokio::test]
+async fn zrangestore_by_lex_forward() {
+    let m = Mock::int(1);
+    m.zrangestore_by_lex(
+        "d",
+        "s",
+        &LexBound::Inclusive(b"a".to_vec()),
+        &LexBound::PositiveInfinity,
+        false,
+        None,
+    )
+    .await
+    .unwrap();
+    m.assert_args(&["ZRANGESTORE", "d", "s", "[a", "+", "BYLEX"]);
+}
+
+#[tokio::test]
+async fn zrangestore_by_lex_rev_swaps_bounds() {
+    let m = Mock::int(1);
+    m.zrangestore_by_lex(
+        "d",
+        "s",
+        &LexBound::NegativeInfinity,
+        &LexBound::Inclusive(b"z".to_vec()),
+        true,
+        None,
+    )
+    .await
+    .unwrap();
+    // REV => (max, min) order.
+    m.assert_args(&["ZRANGESTORE", "d", "s", "[z", "-", "BYLEX", "REV"]);
+}

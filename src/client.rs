@@ -5,7 +5,7 @@
 //! connects to a cluster. Both wrap the shared `glide_core::client::Client` and
 //! implement [`CommandExecutor`], so all command family traits apply to them.
 
-use crate::batch::{Batch, run_batch};
+use crate::batch::{Batch, BatchOptions, run_batch};
 use crate::config::{GlideClientConfiguration, GlideClusterClientConfiguration};
 use crate::error::{GlideError, Result};
 use crate::executor::CommandExecutor;
@@ -169,7 +169,7 @@ impl GlideClient {
             .pubsub_subscriptions
             .as_ref()
             .is_some_and(|s| !s.is_empty());
-        let (sender, pubsub_rx) = make_push_channel(has_subs);
+        let (sender, pubsub_rx) = make_push_channel(has_subs || config.force_pubsub_channel);
         let inner = CoreClient::new(request, sender)
             .await
             .map_err(GlideError::from)?;
@@ -232,7 +232,52 @@ impl GlideClient {
     /// replies. When `raise_on_error` is `true`, the first errored command aborts
     /// with an error; otherwise error replies are returned inline.
     pub async fn exec(&self, batch: &Batch, raise_on_error: bool) -> Result<Vec<Value>> {
-        run_batch(&self.inner, batch, None, raise_on_error).await
+        run_batch(
+            &self.inner,
+            batch,
+            None,
+            raise_on_error,
+            &BatchOptions::default(),
+        )
+        .await
+    }
+
+    /// Execute a [`Batch`] with explicit [`BatchOptions`] (timeout, pipeline
+    /// retry strategy). See [`Self::exec`].
+    pub async fn exec_with_options(
+        &self,
+        batch: &Batch,
+        raise_on_error: bool,
+        options: &BatchOptions,
+    ) -> Result<Vec<Value>> {
+        run_batch(&self.inner, batch, None, raise_on_error, options).await
+    }
+
+    /// Update the password used by this client to authenticate with the server,
+    /// without changing the server-side password (`update_connection_password`).
+    ///
+    /// The new `password` is stored and used for all future (re)connections. Pass
+    /// `None` to clear a previously-set password (revert to no authentication).
+    ///
+    /// When `immediate_auth` is `true`, an `AUTH` is issued on the live
+    /// connection right away so the change takes effect without waiting for a
+    /// reconnect; the call errors if that `AUTH` is rejected. When `false`, the
+    /// password is only applied on the next reconnection.
+    ///
+    /// Mirrors Python's `update_connection_password`.
+    pub async fn update_connection_password(
+        &self,
+        password: Option<String>,
+        immediate_auth: bool,
+    ) -> Result<()> {
+        // `Client` is Clone (Arc inside) and the core method needs `&mut self`,
+        // so we operate on a cheap clone — same seam as `execute_command`.
+        let mut client = self.inner.clone();
+        client
+            .update_connection_password(password, immediate_auth)
+            .await
+            .map_err(GlideError::from)?;
+        Ok(())
     }
 }
 
@@ -268,7 +313,7 @@ impl GlideClusterClient {
             .pubsub_subscriptions
             .as_ref()
             .is_some_and(|s| !s.is_empty());
-        let (sender, pubsub_rx) = make_push_channel(has_subs);
+        let (sender, pubsub_rx) = make_push_channel(has_subs || config.force_pubsub_channel);
         let inner = CoreClient::new(request, sender)
             .await
             .map_err(GlideError::from)?;
@@ -339,7 +384,49 @@ impl GlideClusterClient {
         route: Option<Route>,
     ) -> Result<Vec<Value>> {
         let routing = route.map(|r| r.to_routing_info(None));
-        run_batch(&self.inner, batch, routing, raise_on_error).await
+        run_batch(
+            &self.inner,
+            batch,
+            routing,
+            raise_on_error,
+            &BatchOptions::default(),
+        )
+        .await
+    }
+
+    /// Execute a [`Batch`] with explicit [`BatchOptions`] (timeout, pipeline
+    /// retry strategy), optionally routed. See [`Self::exec`].
+    pub async fn exec_with_options(
+        &self,
+        batch: &Batch,
+        raise_on_error: bool,
+        route: Option<Route>,
+        options: &BatchOptions,
+    ) -> Result<Vec<Value>> {
+        let routing = route.map(|r| r.to_routing_info(None));
+        run_batch(&self.inner, batch, routing, raise_on_error, options).await
+    }
+
+    /// Update the password used by this client to authenticate with the cluster,
+    /// without changing the server-side password (`update_connection_password`).
+    ///
+    /// The new `password` is stored and used for all future (re)connections to
+    /// every node. Pass `None` to clear a previously-set password. When
+    /// `immediate_auth` is `true`, an `AUTH` is issued right away and the call
+    /// errors if rejected; when `false`, it applies on the next reconnection.
+    ///
+    /// Mirrors Python's `update_connection_password`.
+    pub async fn update_connection_password(
+        &self,
+        password: Option<String>,
+        immediate_auth: bool,
+    ) -> Result<()> {
+        let mut client = self.inner.clone();
+        client
+            .update_connection_password(password, immediate_auth)
+            .await
+            .map_err(GlideError::from)?;
+        Ok(())
     }
 
     /// Incrementally iterate the entire keyspace of a cluster (`SCAN` for
