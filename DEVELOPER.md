@@ -110,6 +110,6 @@ cargo test --test it_parity_guard      # same check as a test (skips without pyt
 
 When the pinned fork rev is bumped, run the verifier to see what changed in
 the fork's surface, update the table deliberately, and refresh the pinned rev
-references (`licenses/`, `NOTICE`). Commands beyond redis-rs's surface belong
+references (`NOTICE`). Commands beyond the fork's surface belong
 in the per-family extension traits (`src/commands/<family>.rs`), not in the
 table.

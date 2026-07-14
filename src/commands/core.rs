@@ -71,7 +71,7 @@ macro_rules! implement_glide_commands {
                 }
             )*
 
-    /// Incrementally iterate the keys space.
+    /// Cursor-driven `SCAN` over the whole keyspace.
     #[inline]
     fn scan<RV: FromRedisValue>(&mut self) -> RedisFuture<'_, redis::AsyncIter<'_, RV>> {
         let mut c = cmd("SCAN");
@@ -79,7 +79,7 @@ macro_rules! implement_glide_commands {
         Box::pin(async move { c.iter_async(self).await })
     }
 
-    /// Incrementally iterate the keys space for keys matching a pattern.
+    /// Cursor-driven `SCAN` over the keyspace, filtered by a `MATCH` pattern.
     #[inline]
     fn scan_match<P: redis::ToRedisArgs, RV: FromRedisValue>(
         &mut self,
@@ -90,7 +90,7 @@ macro_rules! implement_glide_commands {
         Box::pin(async move { c.iter_async(self).await })
     }
 
-    /// Incrementally iterate hash fields and associated values.
+    /// Cursor-driven `HSCAN` over a hash's fields and values.
     #[inline]
     fn hscan<K: redis::ToRedisArgs, RV: FromRedisValue>(
         &mut self,
@@ -101,8 +101,7 @@ macro_rules! implement_glide_commands {
         Box::pin(async move { c.iter_async(self).await })
     }
 
-    /// Incrementally iterate hash fields and associated values for field
-    /// names matching a pattern.
+    /// Cursor-driven `HSCAN`, filtered by a field-name `MATCH` pattern.
     #[inline]
     fn hscan_match<K: redis::ToRedisArgs, P: redis::ToRedisArgs, RV: FromRedisValue>(
         &mut self,
@@ -114,7 +113,7 @@ macro_rules! implement_glide_commands {
         Box::pin(async move { c.iter_async(self).await })
     }
 
-    /// Incrementally iterate set elements.
+    /// Cursor-driven `SSCAN` over a set's members.
     #[inline]
     fn sscan<K: redis::ToRedisArgs, RV: FromRedisValue>(
         &mut self,
@@ -125,7 +124,7 @@ macro_rules! implement_glide_commands {
         Box::pin(async move { c.iter_async(self).await })
     }
 
-    /// Incrementally iterate set elements for elements matching a pattern.
+    /// Cursor-driven `SSCAN`, filtered by a `MATCH` pattern.
     #[inline]
     fn sscan_match<K: redis::ToRedisArgs, P: redis::ToRedisArgs, RV: FromRedisValue>(
         &mut self,
@@ -137,7 +136,7 @@ macro_rules! implement_glide_commands {
         Box::pin(async move { c.iter_async(self).await })
     }
 
-    /// Incrementally iterate sorted set elements.
+    /// Cursor-driven `ZSCAN` over a sorted set's members and scores.
     #[inline]
     fn zscan<K: redis::ToRedisArgs, RV: FromRedisValue>(
         &mut self,
@@ -148,8 +147,7 @@ macro_rules! implement_glide_commands {
         Box::pin(async move { c.iter_async(self).await })
     }
 
-    /// Incrementally iterate sorted set elements for elements matching a
-    /// pattern.
+    /// Cursor-driven `ZSCAN`, filtered by a `MATCH` pattern.
     #[inline]
     fn zscan_match<K: redis::ToRedisArgs, P: redis::ToRedisArgs, RV: FromRedisValue>(
         &mut self,
@@ -190,7 +188,7 @@ macro_rules! implement_glide_commands {
                 }
             )*
 
-    /// Incrementally iterate the keys space.
+    /// Cursor-driven `SCAN` over the whole keyspace.
     #[inline]
     fn scan<RV: FromRedisValue>(&mut self) -> RedisResult<redis::Iter<'_, RV>> {
         let mut c = cmd("SCAN");
@@ -198,7 +196,7 @@ macro_rules! implement_glide_commands {
         c.iter(self)
     }
 
-    /// Incrementally iterate the keys space for keys matching a pattern.
+    /// Cursor-driven `SCAN` over the keyspace, filtered by a `MATCH` pattern.
     #[inline]
     fn scan_match<P: redis::ToRedisArgs, RV: FromRedisValue>(
         &mut self,
@@ -209,7 +207,7 @@ macro_rules! implement_glide_commands {
         c.iter(self)
     }
 
-    /// Incrementally iterate hash fields and associated values.
+    /// Cursor-driven `HSCAN` over a hash's fields and values.
     #[inline]
     fn hscan<K: redis::ToRedisArgs, RV: FromRedisValue>(
         &mut self,
@@ -220,8 +218,7 @@ macro_rules! implement_glide_commands {
         c.iter(self)
     }
 
-    /// Incrementally iterate hash fields and associated values for field
-    /// names matching a pattern.
+    /// Cursor-driven `HSCAN`, filtered by a field-name `MATCH` pattern.
     #[inline]
     fn hscan_match<K: redis::ToRedisArgs, P: redis::ToRedisArgs, RV: FromRedisValue>(
         &mut self,
@@ -233,7 +230,7 @@ macro_rules! implement_glide_commands {
         c.iter(self)
     }
 
-    /// Incrementally iterate set elements.
+    /// Cursor-driven `SSCAN` over a set's members.
     #[inline]
     fn sscan<K: redis::ToRedisArgs, RV: FromRedisValue>(
         &mut self,
@@ -244,7 +241,7 @@ macro_rules! implement_glide_commands {
         c.iter(self)
     }
 
-    /// Incrementally iterate set elements for elements matching a pattern.
+    /// Cursor-driven `SSCAN`, filtered by a `MATCH` pattern.
     #[inline]
     fn sscan_match<K: redis::ToRedisArgs, P: redis::ToRedisArgs, RV: FromRedisValue>(
         &mut self,
@@ -256,7 +253,7 @@ macro_rules! implement_glide_commands {
         c.iter(self)
     }
 
-    /// Incrementally iterate sorted set elements.
+    /// Cursor-driven `ZSCAN` over a sorted set's members and scores.
     #[inline]
     fn zscan<K: redis::ToRedisArgs, RV: FromRedisValue>(
         &mut self,
@@ -267,8 +264,7 @@ macro_rules! implement_glide_commands {
         c.iter(self)
     }
 
-    /// Incrementally iterate sorted set elements for elements matching a
-    /// pattern.
+    /// Cursor-driven `ZSCAN`, filtered by a `MATCH` pattern.
     #[inline]
     fn zscan_match<K: redis::ToRedisArgs, P: redis::ToRedisArgs, RV: FromRedisValue>(
         &mut self,
@@ -296,7 +292,7 @@ implement_glide_commands! {
     fn set_options<K: ToRedisArgs, V: ToRedisArgs>(key: K, value: V, options: SetOptions);
     /// `MSET`.
     #[allow(deprecated)]
-    #[deprecated(since = "0.22.4", note = "Renamed to mset() to reflect Redis name")]
+    #[deprecated(since = "0.22.4", note = "use mset() (same command)")]
     fn set_multiple<K: ToRedisArgs, V: ToRedisArgs>(items: &'a [(K, V)]);
     /// `MSET`.
     fn mset<K: ToRedisArgs, V: ToRedisArgs>(items: &'a [(K, V)]);
