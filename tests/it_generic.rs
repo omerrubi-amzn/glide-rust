@@ -71,29 +71,20 @@ matrix_test!(expire_nx_xx, c, {
     let k = common::key("k");
     let _: () = c.set(&k, "v").await.unwrap();
     // NX sets only when no expiry exists — use raw cmd for EXPIRE with options.
-    let nx_set: bool = redis::cmd("EXPIRE")
-        .arg(&k)
-        .arg(100)
-        .arg("NX")
-        .query_async(&mut c.clone())
+    let nx_set: bool = c
+        .glide_send(redis::cmd("EXPIRE").arg(&k).arg(100).arg("NX").clone())
         .await
         .unwrap();
     assert!(nx_set);
     // NX again fails since an expiry now exists.
-    let nx_set2: bool = redis::cmd("EXPIRE")
-        .arg(&k)
-        .arg(200)
-        .arg("NX")
-        .query_async(&mut c.clone())
+    let nx_set2: bool = c
+        .glide_send(redis::cmd("EXPIRE").arg(&k).arg(200).arg("NX").clone())
         .await
         .unwrap();
     assert!(!nx_set2);
     // XX succeeds since an expiry exists.
-    let xx_set: bool = redis::cmd("EXPIRE")
-        .arg(&k)
-        .arg(200)
-        .arg("XX")
-        .query_async(&mut c.clone())
+    let xx_set: bool = c
+        .glide_send(redis::cmd("EXPIRE").arg(&k).arg(200).arg("XX").clone())
         .await
         .unwrap();
     assert!(xx_set);
@@ -104,28 +95,19 @@ matrix_test!(expire_gt_lt, c, {
     let _: () = c.set(&k, "v").await.unwrap();
     let _: bool = c.expire(&k, 100).await.unwrap();
     // GT only applies when new > current.
-    let gt_set: bool = redis::cmd("EXPIRE")
-        .arg(&k)
-        .arg(200)
-        .arg("GT")
-        .query_async(&mut c.clone())
+    let gt_set: bool = c
+        .glide_send(redis::cmd("EXPIRE").arg(&k).arg(200).arg("GT").clone())
         .await
         .unwrap();
     assert!(gt_set);
-    let gt_fail: bool = redis::cmd("EXPIRE")
-        .arg(&k)
-        .arg(50)
-        .arg("GT")
-        .query_async(&mut c.clone())
+    let gt_fail: bool = c
+        .glide_send(redis::cmd("EXPIRE").arg(&k).arg(50).arg("GT").clone())
         .await
         .unwrap();
     assert!(!gt_fail);
     // LT only applies when new < current.
-    let lt_set: bool = redis::cmd("EXPIRE")
-        .arg(&k)
-        .arg(10)
-        .arg("LT")
-        .query_async(&mut c.clone())
+    let lt_set: bool = c
+        .glide_send(redis::cmd("EXPIRE").arg(&k).arg(10).arg("LT").clone())
         .await
         .unwrap();
     assert!(lt_set);

@@ -24,9 +24,10 @@ GLIDE binding.
 - **`custom_command` escape hatch** — run *any* command (with optional cluster
   routing) even where a typed wrapper is not provided, guaranteeing 100%
   functional coverage.
-- **Batching** — `pipe()` pipelines and `MULTI`/`EXEC` transactions,
-  with GLIDE execution controls (`PipelineOptions`: per-call timeout and
-  pipeline retry strategy) via `execute_pipeline`.
+- **Batching** — `pipe()` pipelines and `MULTI`/`EXEC` transactions, executed
+  typed via `query_glide` (zero extra payload copies) or with GLIDE execution
+  controls (`PipelineOptions`: per-call timeout and pipeline retry strategy)
+  via `execute_pipeline`.
 - **Dynamic authentication** — rotate the connection password at runtime with
   `update_connection_password`, or use **AWS IAM** auth (ElastiCache / MemoryDB)
   via `ServerCredentials::iam`.
@@ -78,7 +79,7 @@ the build fails with `environment variable GLIDE_VERSION not defined`. Add a
 # .cargo/config.toml
 [env]
 GLIDE_NAME = "GlideRust"
-GLIDE_VERSION = "0.1.0"
+GLIDE_VERSION = "0.2.0"
 # Optional: avoids an aws-lc-rs CPU-jitter-entropy connection-latency regression.
 AWS_LC_SYS_NO_JITTER_ENTROPY = "1"
 ```
@@ -158,41 +159,47 @@ build, test, and benchmark.
 
 GLIDE's command API is **source-compatible with the redis-rs fork
 (v0.25.2, predating the upstream license change)**: method names, signatures,
-and wire encoding match, so existing call sites — including `Pipeline` with
-atomic transactions, scan iterators, and `Script` — compile unchanged with
+and wire encoding match, so existing typed call sites compile unchanged with
 `RedisResult` errors. Everything you need is re-exported from `glide`.
 
 Every command is executed by glide-core (multiplexing, cluster routing,
 reconnection, IAM auth), handed over **by value** on GLIDE's zero-extra-copy
-path. The clients also implement `redis::aio::ConnectionLike` (sync: the
-blocking `redis::ConnectionLike`), so `Pipeline`, scan iterators, generic
-code bounded on the fork's traits (`glide::redis::AsyncCommands`), and raw
-`cmd().query_async()` all work unchanged.
+path. Parity is deliberately a **command-surface** contract, not a
+connection-plumbing one: the clients are *not* `redis` connection objects
+(`ConnectionLike`), because that interop layer forced a full payload copy per
+command. The migrations that follow from this are mechanical:
+
+| redis-rs call site            | GLIDE call site                          |
+|-------------------------------|------------------------------------------|
+| `pipe()….query_async(&mut c)` | `pipe()….query_glide(&c)` (`PipelineExt`) |
+| sync `pipe()….query(&mut c)`  | `pipe()….query_glide(&c)` (`sync::PipelineExt`) |
+| `cmd("X")….query_async(&mut c)` | `c.glide_send(cmd)` (typed, by value)  |
+| `con.scan_match(pat)` iterators | same call — GLIDE-owned iterator, same `next_item()` / `Iterator` shape |
 
 ```rust,no_run
-use glide::{AsyncCommands, GlideClient, GlideClientConfiguration, Script, pipe};
+use glide::{AsyncCommands, GlideClient, GlideClientConfiguration, PipelineExt, Script, pipe};
 
 # async fn demo() -> glide::RedisResult<()> {
 // Standard connection-URL semantics, including rediss:// and database selection:
 let config = GlideClientConfiguration::from_url("redis://user:pass@localhost:6379/2")
     .expect("valid URL");
-# let mut client = GlideClient::connect(config).await.unwrap();
+# let client = GlideClient::connect(config).await.unwrap();
 
 // Typed commands, unchanged from redis-rs call sites:
 client.set::<_, _, ()>("key", 42).await?;
 let value: i64 = client.get("key").await?;
 
-// Pipelines and transactions:
+// Pipelines and transactions (zero extra payload copies):
 let (a, b): (i64, i64) = pipe()
     .atomic()
     .incr("counter", 1)
     .incr("counter", 1)
-    .query_async(&mut client)
+    .query_glide(&client)
     .await?;
 
 // Lua scripts with EVALSHA caching:
 let script = Script::new("return tonumber(ARGV[1]) + 1");
-let n: i64 = script.arg(41).invoke_async(&mut client).await?;
+let n: i64 = script.arg(41).invoke_async(&client).await?;
 # Ok(()) }
 ```
 
@@ -204,22 +211,25 @@ Notes:
 - Cluster: `GlideClusterClientConfiguration::from_urls([...])` accepts
   seed-node URLs; commands are routed automatically.
 - Mutual TLS: `config.client_identity(cert_pem, key_pem)`.
-- Large sync pipelines: `redis::Pipeline::query` on a blocking client incurs a
-  packed-byte round-trip (extra payload copies). For copy-optimal blocking
-  pipelines use `sync::PipelineExt::query_glide(&client)`.
+- Raw commands: build a `redis::Cmd` and send it typed with
+  `client.glide_send(cmd)` (or untyped with `glide_send_owned` /
+  `custom_command`) — this replaces `cmd().query_async()`, without the
+  connection-object copy.
 - Accepted gaps: no Sentinel / unix sockets / async-std (unsupported by
-  glide-core); Pub/Sub stays client-integrated by design.
+  glide-core); Pub/Sub stays client-integrated by design; generic code
+  bounded on the fork's `ConnectionLike`-based traits should re-bound on
+  `glide::AsyncCommands` (performance-motivated deviation).
 
 ## Testing
 
 The suite has three layers (all run in CI and are currently green):
 
-- **Unit tests (server-free, ~300)** — pure logic with no server: config →
+- **Unit tests (server-free, ~260)** — pure logic with no server: config →
   `ConnectionRequest` lowering, route → `RoutingInfo` mapping, option/argument
   encoding, value conversion, and error mapping; plus a **command-family mock
   suite** that drives every typed command through an in-process executor to
   assert exact **request encoding** and **response decoding**.
-- **Integration tests (live server, ~415 executions across 22 files)** — real
+- **Integration tests (live server, ~900 executions across 31 files)** — real
   round-trips against a spawned `valkey-server`, one `tests/it_<family>.rs` per
   command family with edge/error cases (wrong-type, missing key, bounds, expiry
   conditions), **parametrized over RESP2 and RESP3**, plus suites for batches,

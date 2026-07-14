@@ -64,12 +64,15 @@ matrix_test!(bitcount_range_bit, c, {
     let _: i64 = c.setbit(&k, 6, true).await.unwrap();
     // bitcount_range in compat takes byte offsets; use native bitpos_range for BIT index type
     // Use cmd for BITCOUNT with BIT index type
-    let count: i64 = redis::cmd("BITCOUNT")
-        .arg(&k)
-        .arg(0i64)
-        .arg(7i64)
-        .arg("BIT")
-        .query_async(&mut c.clone())
+    let count: i64 = c
+        .glide_send(
+            redis::cmd("BITCOUNT")
+                .arg(&k)
+                .arg(0i64)
+                .arg(7i64)
+                .arg("BIT")
+                .clone(),
+        )
         .await
         .unwrap();
     assert_eq!(count, 2);

@@ -33,13 +33,11 @@ matrix_test!(script_computes_values, c, {
 });
 
 resp_test!(script_noscript_fallback_after_flush, c, {
-    let mut c = c;
+    let c = c;
     // Flush the script cache so EVALSHA is guaranteed to miss, exercising the
     // transparent EVAL fallback.
-    let _: () = cmd("SCRIPT")
-        .arg("FLUSH")
-        .arg("SYNC")
-        .query_async(&mut c)
+    let _: () = c
+        .glide_send(cmd("SCRIPT").arg("FLUSH").arg("SYNC").clone())
         .await
         .unwrap();
     let script = Script::new("return 41 + 1");
@@ -73,10 +71,6 @@ timed_tokio_test!(
         assert_eq!(miss, None);
         let hit: Option<String> = c1.get(&k).await.unwrap();
         assert_eq!(hit.as_deref(), Some("in-db-1"));
-
-        // get_db (ConnectionLike) reports the URL-selected database.
-        assert_eq!(redis::aio::ConnectionLike::get_db(&c1), 1);
-        assert_eq!(redis::aio::ConnectionLike::get_db(&c0), 0);
     }
 );
 
@@ -107,8 +101,9 @@ fn sync_commands_trait_typed_api() {
 
 #[test]
 fn sync_pipeline_and_transaction() {
+    use glide::sync::PipelineExt;
     let srv = server_or_skip!();
-    let mut c = SyncGlideClient::connect(GlideClientConfiguration::with_address(
+    let c = SyncGlideClient::connect(GlideClientConfiguration::with_address(
         "127.0.0.1",
         srv.port,
     ))
@@ -123,7 +118,7 @@ fn sync_pipeline_and_transaction() {
         .ignore()
         .get(&k1)
         .get(&k2)
-        .query(&mut c)
+        .query_glide(&c)
         .unwrap();
     assert_eq!((v1.as_str(), v2), ("x", 9));
 
@@ -132,15 +127,13 @@ fn sync_pipeline_and_transaction() {
         .atomic()
         .incr(&ctr, 1)
         .incr(&ctr, 1)
-        .query(&mut c)
+        .query_glide(&c)
         .unwrap();
     assert_eq!((a, b), (1, 2));
 
     // Native-copy path: PipelineExt::query_glide (borrows &client, sends the
-    // built Pipeline directly — no packed-byte round-trip) must produce
-    // identical results to `Pipeline::query`, including .ignore() handling
-    // and atomic transactions.
-    use glide::sync::PipelineExt;
+    // built Pipeline directly — no packed-byte round-trip) must honor
+    // .ignore() handling and atomic transactions.
     let k3 = common::tkey("cmd_sp", "k3");
     let (v3, cnt): (String, i64) = glide::pipe()
         .set(&k3, "y")
@@ -164,11 +157,12 @@ fn sync_pipeline_and_transaction() {
 #[test]
 fn sync_pipeline_with_literal_multi_exec_is_not_atomic() {
     // A plain (non-atomic) pipeline containing literal MULTI/EXEC commands —
-    // manual transaction management, a real migration pattern. Transaction
-    // detection is driven by the trait call's offset/count, so this must NOT
-    // be collapsed into a glide-core transaction: each command gets a reply.
+    // manual transaction management, a real migration pattern. This must NOT
+    // be collapsed into a glide-core transaction (only `.atomic()` is): each
+    // command gets its own reply.
+    use glide::sync::PipelineExt;
     let srv = server_or_skip!();
-    let mut c = SyncGlideClient::connect(GlideClientConfiguration::with_address(
+    let c = SyncGlideClient::connect(GlideClientConfiguration::with_address(
         "127.0.0.1",
         srv.port,
     ))
@@ -180,7 +174,7 @@ fn sync_pipeline_with_literal_multi_exec_is_not_atomic() {
         .cmd("INCR")
         .arg(&ctr)
         .cmd("EXEC")
-        .query(&mut c)
+        .query_glide(&c)
         .unwrap();
     assert_eq!(multi_ok, "OK");
     assert_eq!(queued, "QUEUED");
@@ -214,15 +208,13 @@ fn sync_script_invoke_and_load() {
 }
 
 resp_test!(script_load_async_returns_hash, c, {
-    let mut c = c;
+    let c = c;
     let script = Script::new("return 7");
     let hash = script.load_async(&c).await.unwrap();
     assert_eq!(hash, script.get_hash());
     // Loaded: EVALSHA now succeeds without fallback.
-    let v: i64 = cmd("EVALSHA")
-        .arg(script.get_hash())
-        .arg(0)
-        .query_async(&mut c)
+    let v: i64 = c
+        .glide_send(cmd("EVALSHA").arg(script.get_hash()).arg(0).clone())
         .await
         .unwrap();
     assert_eq!(v, 7);
@@ -231,17 +223,18 @@ resp_test!(script_load_async_returns_hash, c, {
 resp_test!(noscript_errorkind_passthrough, c, {
     // migrated call sites `match err.kind()`; NOSCRIPT must surface as
     // ErrorKind::NoScriptError outside the Script type's internal fallback.
-    let mut c = c;
-    let _: () = cmd("SCRIPT")
-        .arg("FLUSH")
-        .arg("SYNC")
-        .query_async(&mut c)
+    let c = c;
+    let _: () = c
+        .glide_send(cmd("SCRIPT").arg("FLUSH").arg("SYNC").clone())
         .await
         .unwrap();
-    let err = cmd("EVALSHA")
-        .arg("0000000000000000000000000000000000000000")
-        .arg(0)
-        .query_async::<_, i64>(&mut c)
+    let err = c
+        .glide_send::<i64>(
+            cmd("EVALSHA")
+                .arg("0000000000000000000000000000000000000000")
+                .arg(0)
+                .clone(),
+        )
         .await
         .unwrap_err();
     assert_eq!(err.kind(), glide::ErrorKind::NoScriptError, "got: {err}");
@@ -250,11 +243,9 @@ resp_test!(noscript_errorkind_passthrough, c, {
 // ---- normalized reply shapes: streams / geo / CONFIG GET ------------------------
 
 matrix_test!(config_get_decodes_to_map, c, {
-    let mut c = c;
-    let cfg: HashMap<String, String> = cmd("CONFIG")
-        .arg("GET")
-        .arg("maxmemory")
-        .query_async(&mut c)
+    let c = c;
+    let cfg: HashMap<String, String> = c
+        .glide_send(cmd("CONFIG").arg("GET").arg("maxmemory").clone())
         .await
         .unwrap();
     assert!(cfg.contains_key("maxmemory"), "got: {cfg:?}");
@@ -263,55 +254,36 @@ matrix_test!(config_get_decodes_to_map, c, {
 matrix_test!(xadd_xlen_via_cmd, c, {
     // The fork has no typed stream methods — migrated call sites drive streams via
     // cmd(); verify typed decoding of the replies.
-    let mut c = c;
+    let c = c;
     let k = common::key("cmd_stream");
-    let id1: String = cmd("XADD")
-        .arg(&k)
-        .arg("*")
-        .arg("f")
-        .arg("v1")
-        .query_async(&mut c)
+    let id1: String = c
+        .glide_send(cmd("XADD").arg(&k).arg("*").arg("f").arg("v1").clone())
         .await
         .unwrap();
-    let _: String = cmd("XADD")
-        .arg(&k)
-        .arg("*")
-        .arg("f")
-        .arg("v2")
-        .query_async(&mut c)
+    let _: String = c
+        .glide_send(cmd("XADD").arg(&k).arg("*").arg("f").arg("v2").clone())
         .await
         .unwrap();
     assert!(id1.contains('-'));
-    let len: i64 = cmd("XLEN").arg(&k).query_async(&mut c).await.unwrap();
+    let len: i64 = c.glide_send(cmd("XLEN").arg(&k).clone()).await.unwrap();
     assert_eq!(len, 2);
 });
 
 matrix_test!(xrange_decode_shape, c, {
     // glide-core normalizes stream-entry replies to a map of id -> flat
     // field-value array; verify it decodes into standard containers.
-    let mut c = c;
+    let c = c;
     let k = common::key("cmd_xr");
-    let _: String = cmd("XADD")
-        .arg(&k)
-        .arg("1-1")
-        .arg("a")
-        .arg("1")
-        .query_async(&mut c)
+    let _: String = c
+        .glide_send(cmd("XADD").arg(&k).arg("1-1").arg("a").arg("1").clone())
         .await
         .unwrap();
-    let _: String = cmd("XADD")
-        .arg(&k)
-        .arg("2-2")
-        .arg("b")
-        .arg("2")
-        .query_async(&mut c)
+    let _: String = c
+        .glide_send(cmd("XADD").arg(&k).arg("2-2").arg("b").arg("2").clone())
         .await
         .unwrap();
-    let entries: HashMap<String, Vec<(String, String)>> = cmd("XRANGE")
-        .arg(&k)
-        .arg("-")
-        .arg("+")
-        .query_async(&mut c)
+    let entries: HashMap<String, Vec<(String, String)>> = c
+        .glide_send(cmd("XRANGE").arg(&k).arg("-").arg("+").clone())
         .await
         .unwrap();
     assert_eq!(entries.len(), 2);
@@ -321,37 +293,41 @@ matrix_test!(xrange_decode_shape, c, {
 
 matrix_test!(geo_decode_shapes, c, {
     // The fork has no typed geo methods either — cmd()-driven, typed decode.
-    let mut c = c;
+    let c = c;
     let k = common::key("cmd_geo");
-    let added: i64 = cmd("GEOADD")
-        .arg(&k)
-        .arg(13.361389)
-        .arg(38.115556)
-        .arg("Palermo")
-        .arg(15.087269)
-        .arg(37.502669)
-        .arg("Catania")
-        .query_async(&mut c)
+    let added: i64 = c
+        .glide_send(
+            cmd("GEOADD")
+                .arg(&k)
+                .arg(13.361389)
+                .arg(38.115556)
+                .arg("Palermo")
+                .arg(15.087269)
+                .arg(37.502669)
+                .arg("Catania")
+                .clone(),
+        )
         .await
         .unwrap();
     assert_eq!(added, 2);
 
     // GEODIST is normalized to a double.
-    let dist: f64 = cmd("GEODIST")
-        .arg(&k)
-        .arg("Palermo")
-        .arg("Catania")
-        .arg("km")
-        .query_async(&mut c)
+    let dist: f64 = c
+        .glide_send(
+            cmd("GEODIST")
+                .arg(&k)
+                .arg("Palermo")
+                .arg("Catania")
+                .arg("km")
+                .clone(),
+        )
         .await
         .unwrap();
     assert!((dist - 166.27).abs() < 1.0, "got {dist}");
 
     // GEOPOS is normalized to arrays of double pairs.
-    let pos: Vec<Vec<(f64, f64)>> = cmd("GEOPOS")
-        .arg(&k)
-        .arg("Palermo")
-        .query_async(&mut c)
+    let pos: Vec<Vec<(f64, f64)>> = c
+        .glide_send(cmd("GEOPOS").arg(&k).arg("Palermo").clone())
         .await
         .unwrap();
     assert!((pos[0][0].0 - 13.361389).abs() < 0.001);
@@ -430,17 +406,15 @@ async fn cluster_script_noscript_fallback() {
     // mode. Flush all nodes first to guarantee the miss, then invoke enough
     // times to hit multiple nodes.
     let cluster = cluster_or_skip!();
-    let mut c = match cluster.client().await {
+    let c = match cluster.client().await {
         Some(c) => c,
         None => {
             eprintln!("SKIP: cluster client connect failed");
             return;
         }
     };
-    let _: () = cmd("SCRIPT")
-        .arg("FLUSH")
-        .arg("SYNC")
-        .query_async(&mut c)
+    let _: () = c
+        .glide_send(cmd("SCRIPT").arg("FLUSH").arg("SYNC").clone())
         .await
         .unwrap_or(());
     let script = Script::new("return 40 + 2");

@@ -46,14 +46,27 @@ fork's `implement_commands!` table, enforced by a signature-parity guard
 (`tools/verify_command_table.py`, run by `tests/it_parity_guard.rs`).
 Method names, generic parameter order, and
 wire encoding match the fork exactly (methods delegate to its own
-`Cmd::<name>()` constructors), with two deliberate deviations: methods take
-`&self` (the clients are cheaply cloneable handles), and commands are handed
-to glide-core **by value** via the `glide_send_owned` required method — the
-native zero-extra-copy path.
+`Cmd::<name>()` constructors).
+
+Parity is a **command-surface** contract, not a connection-plumbing one.
+Deliberate deviations, all performance-motivated:
+- methods take `&self` (the clients are cheaply cloneable handles) and hand
+  the built command to glide-core **by value** via the `glide_send_owned`
+  required method — the native zero-extra-copy path;
+- the clients do **not** implement the `redis` crate's connection-object
+  traits (`ConnectionLike`): that interop hands commands over by reference,
+  which forced a full payload copy per command to bridge into glide-core's
+  owned dispatch. Raw commands go through the typed `glide_send` escape
+  hatch instead;
+- the `scan*` methods return GLIDE-owned iterators (`src/commands/scan.rs`,
+  same `next_item()` / `Iterator` call shape as redis-rs), each page
+  dispatched by value.
 
 ```rust
-pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sync + Sized {
+pub trait AsyncCommands: Send + Sync + Sized {
     fn glide_send_owned<'a>(&'a self, cmd: Cmd) -> RedisFuture<'a, Value>;
+    // typed escape hatch (replaces `cmd().query_async()`):
+    fn glide_send<'a, RV: FromRedisValue>(&'a self, cmd: Cmd) -> RedisFuture<'a, RV> { /* provided */ }
     // + 151 table-defined methods with fork-exact signatures:
     fn get<'a, K: ToRedisArgs + Send + Sync + 'a, RV: FromRedisValue>(
         &'a self, key: K) -> RedisFuture<'a, RV> { /* Cmd::get -> glide_send_owned */ }
@@ -98,8 +111,12 @@ expose the same methods with `block_on`. Mirrors Python `glide-sync`.
 
 ## Pipelines / Transactions
 `redis::Pipeline` is used directly: build with `glide::pipe()` (add
-`.atomic()` for `MULTI`/`EXEC`), execute typed via `Pipeline::query_async`
-(sync: `PipelineExt::query_glide`), or via `execute_pipeline(&Pipeline,
-raise_on_error, &PipelineOptions)` when GLIDE execution controls (per-call
-timeout, pipeline retry policy, cluster routing) are needed. The client
-dispatches to glide-core's `send_transaction` (atomic) or `send_pipeline`.
+`.atomic()` for `MULTI`/`EXEC`), execute typed via `PipelineExt::query_glide`
+(async and, mirrored in `sync::PipelineExt`, blocking), or via
+`execute_pipeline(&Pipeline, raise_on_error, &PipelineOptions)` when GLIDE
+execution controls (per-call timeout, pipeline retry policy, cluster routing)
+are needed. `query_glide` hands the built `&Pipeline` to glide-core by
+reference (zero payload copies) and reuses the `redis` crate's typed decoding
+(`.ignore()` markers, transaction unwrapping) through a crate-private adapter.
+The client dispatches to glide-core's `send_transaction` (atomic) or
+`send_pipeline`.

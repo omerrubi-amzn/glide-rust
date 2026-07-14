@@ -97,6 +97,12 @@ impl AggregationType {
 #[async_trait]
 pub trait SortedSetCommands: CommandExecutor {
     /// Increment the score of `member` by `increment` (`ZADD ... INCR`).
+    ///
+    /// This is the plain (unconditional) `INCR` form, so the result is always
+    /// `Some(new_score)`. The `Option` return is kept for the conditional
+    /// forms of the command: combined with `NX`/`XX`/`GT`/`LT` (reachable via
+    /// [`crate::CustomCommand::custom_command`]) the server replies nil when
+    /// the condition suppresses the update.
     async fn zadd_incr<K: ToRedisArgs + Send, M: ToRedisArgs + Send>(
         &self,
         key: K,

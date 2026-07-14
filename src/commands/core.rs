@@ -6,15 +6,24 @@
 //! vendored redis-rs fork (v0.25.2, predating the upstream license change):
 //! same method names, generic parameter order, and argument lists, so
 //! migrated call sites (including turbofish annotations) compile unchanged.
-//! Every method delegates to the fork's `Cmd::<name>()` constructor, so the
-//! wire encoding is identical by construction; signature parity is enforced
-//! by `tests/it_parity_guard.rs`.
+//! Every table method delegates to the fork's `Cmd::<name>()` constructor, so
+//! the wire encoding is identical by construction; signature parity is
+//! enforced by `tests/it_parity_guard.rs`.
 //!
 //! The built command is handed to glide-core **by value** through
 //! [`AsyncCommands::glide_send_owned`] — the same zero-extra-copy path as the
 //! rest of the client. Methods take `&self` (the clients are cheaply
 //! cloneable handles); migrated `&mut` call sites still compile via
 //! auto-borrow.
+//!
+//! Two deliberate deviations trade redis-rs parity for performance and
+//! clarity (parity here is a command-surface contract, not a
+//! connection-plumbing one):
+//! * the traits are **not** coupled to the `redis` crate's connection-object
+//!   (`ConnectionLike`) machinery — dispatch is GLIDE's owned-send path only;
+//! * the `scan*` methods take `&self` and return GLIDE's own iterators
+//!   ([`crate::commands::scan`]) with the familiar `next_item()` /
+//!   `Iterator` shape, each page dispatched by value (no per-page copies).
 //!
 //! Commands beyond this table (streams, geo, `FT.*`, `JSON.*`, …) live in
 //! the per-family extension traits in [`crate::commands`].
@@ -25,7 +34,7 @@
 
 use redis::{
     Cmd, Direction, Expiry, FromRedisValue, LposOptions, RedisFuture, RedisResult, SetOptions,
-    ToRedisArgs, Value, cmd, from_owned_redis_value,
+    ToRedisArgs, Value, from_owned_redis_value,
 };
 
 /// Defines the unified [`AsyncCommands`] and [`Commands`] traits from one
@@ -48,12 +57,25 @@ macro_rules! implement_glide_commands {
         ///
         /// Implemented by [`crate::GlideClient`] and
         /// [`crate::GlideClusterClient`] — see the [module docs](self).
-        pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sync + Sized {
+        ///
+        /// Deliberately **not** tied to the `redis` crate's connection-object
+        /// traits: every method dispatches through [`Self::glide_send_owned`],
+        /// GLIDE's zero-extra-copy path.
+        pub trait AsyncCommands: Send + Sync + Sized {
             /// Send an already-built command **by value** (no clone). This is
             /// the single required method; every typed command delegates to
             /// it. Also useful directly as a zero-extra-copy escape hatch for
             /// custom commands with large payloads.
             fn glide_send_owned<'a>(&'a self, cmd: Cmd) -> RedisFuture<'a, Value>;
+
+            /// Typed escape hatch: send an already-built [`Cmd`] by value and
+            /// decode the reply into `RV`. This replaces
+            /// `cmd(...).query_async(&mut con)` call sites — same decode, no
+            /// connection-object machinery, no payload copy.
+            #[inline]
+            fn glide_send<'a, RV: FromRedisValue>(&'a self, cmd: Cmd) -> RedisFuture<'a, RV> {
+                Box::pin(async move { from_owned_redis_value(self.glide_send_owned(cmd).await?) })
+            }
 
             $(
                 $(#[$attr])*
@@ -71,92 +93,111 @@ macro_rules! implement_glide_commands {
                 }
             )*
 
+    // The scan iterators are a deliberate GLIDE deviation from redis-rs:
+    // `&self` receivers returning GLIDE's own iterator type (same
+    // `next_item()` call shape), with every page dispatched by value on the
+    // owned-send path — no connection-object machinery, no per-page copies.
+
     /// Cursor-driven `SCAN` over the whole keyspace.
     #[inline]
-    fn scan<RV: FromRedisValue>(&mut self) -> RedisFuture<'_, redis::AsyncIter<'_, RV>> {
-        let mut c = cmd("SCAN");
-        c.cursor_arg(0);
-        Box::pin(async move { c.iter_async(self).await })
+    fn scan<'s, RV: FromRedisValue + Send + 's>(
+        &'s self,
+    ) -> RedisFuture<'s, crate::commands::scan::ScanIter<'s, Self, RV>> {
+        Box::pin(crate::commands::scan::ScanIter::new(
+            self,
+            vec![b"SCAN".to_vec()],
+            Vec::new(),
+        ))
     }
 
     /// Cursor-driven `SCAN` over the keyspace, filtered by a `MATCH` pattern.
     #[inline]
-    fn scan_match<P: redis::ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+    fn scan_match<'s, P: ToRedisArgs, RV: FromRedisValue + Send + 's>(
+        &'s self,
         pattern: P,
-    ) -> RedisFuture<'_, redis::AsyncIter<'_, RV>> {
-        let mut c = cmd("SCAN");
-        c.cursor_arg(0).arg("MATCH").arg(pattern);
-        Box::pin(async move { c.iter_async(self).await })
+    ) -> RedisFuture<'s, crate::commands::scan::ScanIter<'s, Self, RV>> {
+        let mut suffix = vec![b"MATCH".to_vec()];
+        pattern.write_redis_args(&mut suffix);
+        Box::pin(crate::commands::scan::ScanIter::new(
+            self,
+            vec![b"SCAN".to_vec()],
+            suffix,
+        ))
     }
 
     /// Cursor-driven `HSCAN` over a hash's fields and values.
     #[inline]
-    fn hscan<K: redis::ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+    fn hscan<'s, K: ToRedisArgs, RV: FromRedisValue + Send + 's>(
+        &'s self,
         key: K,
-    ) -> RedisFuture<'_, redis::AsyncIter<'_, RV>> {
-        let mut c = cmd("HSCAN");
-        c.arg(key).cursor_arg(0);
-        Box::pin(async move { c.iter_async(self).await })
+    ) -> RedisFuture<'s, crate::commands::scan::ScanIter<'s, Self, RV>> {
+        let mut prefix = vec![b"HSCAN".to_vec()];
+        key.write_redis_args(&mut prefix);
+        Box::pin(crate::commands::scan::ScanIter::new(self, prefix, Vec::new()))
     }
 
     /// Cursor-driven `HSCAN`, filtered by a field-name `MATCH` pattern.
     #[inline]
-    fn hscan_match<K: redis::ToRedisArgs, P: redis::ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+    fn hscan_match<'s, K: ToRedisArgs, P: ToRedisArgs, RV: FromRedisValue + Send + 's>(
+        &'s self,
         key: K,
         pattern: P,
-    ) -> RedisFuture<'_, redis::AsyncIter<'_, RV>> {
-        let mut c = cmd("HSCAN");
-        c.arg(key).cursor_arg(0).arg("MATCH").arg(pattern);
-        Box::pin(async move { c.iter_async(self).await })
+    ) -> RedisFuture<'s, crate::commands::scan::ScanIter<'s, Self, RV>> {
+        let mut prefix = vec![b"HSCAN".to_vec()];
+        key.write_redis_args(&mut prefix);
+        let mut suffix = vec![b"MATCH".to_vec()];
+        pattern.write_redis_args(&mut suffix);
+        Box::pin(crate::commands::scan::ScanIter::new(self, prefix, suffix))
     }
 
     /// Cursor-driven `SSCAN` over a set's members.
     #[inline]
-    fn sscan<K: redis::ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+    fn sscan<'s, K: ToRedisArgs, RV: FromRedisValue + Send + 's>(
+        &'s self,
         key: K,
-    ) -> RedisFuture<'_, redis::AsyncIter<'_, RV>> {
-        let mut c = cmd("SSCAN");
-        c.arg(key).cursor_arg(0);
-        Box::pin(async move { c.iter_async(self).await })
+    ) -> RedisFuture<'s, crate::commands::scan::ScanIter<'s, Self, RV>> {
+        let mut prefix = vec![b"SSCAN".to_vec()];
+        key.write_redis_args(&mut prefix);
+        Box::pin(crate::commands::scan::ScanIter::new(self, prefix, Vec::new()))
     }
 
     /// Cursor-driven `SSCAN`, filtered by a `MATCH` pattern.
     #[inline]
-    fn sscan_match<K: redis::ToRedisArgs, P: redis::ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+    fn sscan_match<'s, K: ToRedisArgs, P: ToRedisArgs, RV: FromRedisValue + Send + 's>(
+        &'s self,
         key: K,
         pattern: P,
-    ) -> RedisFuture<'_, redis::AsyncIter<'_, RV>> {
-        let mut c = cmd("SSCAN");
-        c.arg(key).cursor_arg(0).arg("MATCH").arg(pattern);
-        Box::pin(async move { c.iter_async(self).await })
+    ) -> RedisFuture<'s, crate::commands::scan::ScanIter<'s, Self, RV>> {
+        let mut prefix = vec![b"SSCAN".to_vec()];
+        key.write_redis_args(&mut prefix);
+        let mut suffix = vec![b"MATCH".to_vec()];
+        pattern.write_redis_args(&mut suffix);
+        Box::pin(crate::commands::scan::ScanIter::new(self, prefix, suffix))
     }
 
     /// Cursor-driven `ZSCAN` over a sorted set's members and scores.
     #[inline]
-    fn zscan<K: redis::ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+    fn zscan<'s, K: ToRedisArgs, RV: FromRedisValue + Send + 's>(
+        &'s self,
         key: K,
-    ) -> RedisFuture<'_, redis::AsyncIter<'_, RV>> {
-        let mut c = cmd("ZSCAN");
-        c.arg(key).cursor_arg(0);
-        Box::pin(async move { c.iter_async(self).await })
+    ) -> RedisFuture<'s, crate::commands::scan::ScanIter<'s, Self, RV>> {
+        let mut prefix = vec![b"ZSCAN".to_vec()];
+        key.write_redis_args(&mut prefix);
+        Box::pin(crate::commands::scan::ScanIter::new(self, prefix, Vec::new()))
     }
 
     /// Cursor-driven `ZSCAN`, filtered by a `MATCH` pattern.
     #[inline]
-    fn zscan_match<K: redis::ToRedisArgs, P: redis::ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+    fn zscan_match<'s, K: ToRedisArgs, P: ToRedisArgs, RV: FromRedisValue + Send + 's>(
+        &'s self,
         key: K,
         pattern: P,
-    ) -> RedisFuture<'_, redis::AsyncIter<'_, RV>> {
-        let mut c = cmd("ZSCAN");
-        c.arg(key).cursor_arg(0).arg("MATCH").arg(pattern);
-        Box::pin(async move { c.iter_async(self).await })
+    ) -> RedisFuture<'s, crate::commands::scan::ScanIter<'s, Self, RV>> {
+        let mut prefix = vec![b"ZSCAN".to_vec()];
+        key.write_redis_args(&mut prefix);
+        let mut suffix = vec![b"MATCH".to_vec()];
+        pattern.write_redis_args(&mut suffix);
+        Box::pin(crate::commands::scan::ScanIter::new(self, prefix, suffix))
     }        }
 
         /// **GLIDE's blocking command API.**
@@ -171,10 +212,18 @@ macro_rules! implement_glide_commands {
         /// tokio's "cannot block the current thread from within a runtime");
         /// use [`AsyncCommands`] on the async clients there instead.
         #[cfg(feature = "sync")]
-        pub trait Commands: redis::ConnectionLike + Sized {
+        pub trait Commands: Sized {
             /// Send an already-built command **by value** (no clone). This is
             /// the single required method; every typed command delegates to it.
             fn glide_send_owned_sync(&self, cmd: Cmd) -> RedisResult<Value>;
+
+            /// Typed escape hatch (blocking counterpart of the async
+            /// `glide_send`): send an already-built [`Cmd`] by value and
+            /// decode the reply into `RV`.
+            #[inline]
+            fn glide_send_sync<RV: FromRedisValue>(&self, cmd: Cmd) -> RedisResult<RV> {
+                from_owned_redis_value(self.glide_send_owned_sync(cmd)?)
+            }
 
             $(
                 $(#[$attr])*
@@ -188,92 +237,101 @@ macro_rules! implement_glide_commands {
                 }
             )*
 
+    // See the async trait: GLIDE-owned iterators on the owned-send path.
+    // `SyncScanIter` implements `Iterator`, so `for` loops work as before.
+
     /// Cursor-driven `SCAN` over the whole keyspace.
     #[inline]
-    fn scan<RV: FromRedisValue>(&mut self) -> RedisResult<redis::Iter<'_, RV>> {
-        let mut c = cmd("SCAN");
-        c.cursor_arg(0);
-        c.iter(self)
+    fn scan<RV: FromRedisValue>(
+        &self,
+    ) -> RedisResult<crate::commands::scan::SyncScanIter<'_, Self, RV>> {
+        crate::commands::scan::SyncScanIter::new(self, vec![b"SCAN".to_vec()], Vec::new())
     }
 
     /// Cursor-driven `SCAN` over the keyspace, filtered by a `MATCH` pattern.
     #[inline]
-    fn scan_match<P: redis::ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+    fn scan_match<P: ToRedisArgs, RV: FromRedisValue>(
+        &self,
         pattern: P,
-    ) -> RedisResult<redis::Iter<'_, RV>> {
-        let mut c = cmd("SCAN");
-        c.cursor_arg(0).arg("MATCH").arg(pattern);
-        c.iter(self)
+    ) -> RedisResult<crate::commands::scan::SyncScanIter<'_, Self, RV>> {
+        let mut suffix = vec![b"MATCH".to_vec()];
+        pattern.write_redis_args(&mut suffix);
+        crate::commands::scan::SyncScanIter::new(self, vec![b"SCAN".to_vec()], suffix)
     }
 
     /// Cursor-driven `HSCAN` over a hash's fields and values.
     #[inline]
-    fn hscan<K: redis::ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+    fn hscan<K: ToRedisArgs, RV: FromRedisValue>(
+        &self,
         key: K,
-    ) -> RedisResult<redis::Iter<'_, RV>> {
-        let mut c = cmd("HSCAN");
-        c.arg(key).cursor_arg(0);
-        c.iter(self)
+    ) -> RedisResult<crate::commands::scan::SyncScanIter<'_, Self, RV>> {
+        let mut prefix = vec![b"HSCAN".to_vec()];
+        key.write_redis_args(&mut prefix);
+        crate::commands::scan::SyncScanIter::new(self, prefix, Vec::new())
     }
 
     /// Cursor-driven `HSCAN`, filtered by a field-name `MATCH` pattern.
     #[inline]
-    fn hscan_match<K: redis::ToRedisArgs, P: redis::ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+    fn hscan_match<K: ToRedisArgs, P: ToRedisArgs, RV: FromRedisValue>(
+        &self,
         key: K,
         pattern: P,
-    ) -> RedisResult<redis::Iter<'_, RV>> {
-        let mut c = cmd("HSCAN");
-        c.arg(key).cursor_arg(0).arg("MATCH").arg(pattern);
-        c.iter(self)
+    ) -> RedisResult<crate::commands::scan::SyncScanIter<'_, Self, RV>> {
+        let mut prefix = vec![b"HSCAN".to_vec()];
+        key.write_redis_args(&mut prefix);
+        let mut suffix = vec![b"MATCH".to_vec()];
+        pattern.write_redis_args(&mut suffix);
+        crate::commands::scan::SyncScanIter::new(self, prefix, suffix)
     }
 
     /// Cursor-driven `SSCAN` over a set's members.
     #[inline]
-    fn sscan<K: redis::ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+    fn sscan<K: ToRedisArgs, RV: FromRedisValue>(
+        &self,
         key: K,
-    ) -> RedisResult<redis::Iter<'_, RV>> {
-        let mut c = cmd("SSCAN");
-        c.arg(key).cursor_arg(0);
-        c.iter(self)
+    ) -> RedisResult<crate::commands::scan::SyncScanIter<'_, Self, RV>> {
+        let mut prefix = vec![b"SSCAN".to_vec()];
+        key.write_redis_args(&mut prefix);
+        crate::commands::scan::SyncScanIter::new(self, prefix, Vec::new())
     }
 
     /// Cursor-driven `SSCAN`, filtered by a `MATCH` pattern.
     #[inline]
-    fn sscan_match<K: redis::ToRedisArgs, P: redis::ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+    fn sscan_match<K: ToRedisArgs, P: ToRedisArgs, RV: FromRedisValue>(
+        &self,
         key: K,
         pattern: P,
-    ) -> RedisResult<redis::Iter<'_, RV>> {
-        let mut c = cmd("SSCAN");
-        c.arg(key).cursor_arg(0).arg("MATCH").arg(pattern);
-        c.iter(self)
+    ) -> RedisResult<crate::commands::scan::SyncScanIter<'_, Self, RV>> {
+        let mut prefix = vec![b"SSCAN".to_vec()];
+        key.write_redis_args(&mut prefix);
+        let mut suffix = vec![b"MATCH".to_vec()];
+        pattern.write_redis_args(&mut suffix);
+        crate::commands::scan::SyncScanIter::new(self, prefix, suffix)
     }
 
     /// Cursor-driven `ZSCAN` over a sorted set's members and scores.
     #[inline]
-    fn zscan<K: redis::ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+    fn zscan<K: ToRedisArgs, RV: FromRedisValue>(
+        &self,
         key: K,
-    ) -> RedisResult<redis::Iter<'_, RV>> {
-        let mut c = cmd("ZSCAN");
-        c.arg(key).cursor_arg(0);
-        c.iter(self)
+    ) -> RedisResult<crate::commands::scan::SyncScanIter<'_, Self, RV>> {
+        let mut prefix = vec![b"ZSCAN".to_vec()];
+        key.write_redis_args(&mut prefix);
+        crate::commands::scan::SyncScanIter::new(self, prefix, Vec::new())
     }
 
     /// Cursor-driven `ZSCAN`, filtered by a `MATCH` pattern.
     #[inline]
-    fn zscan_match<K: redis::ToRedisArgs, P: redis::ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+    fn zscan_match<K: ToRedisArgs, P: ToRedisArgs, RV: FromRedisValue>(
+        &self,
         key: K,
         pattern: P,
-    ) -> RedisResult<redis::Iter<'_, RV>> {
-        let mut c = cmd("ZSCAN");
-        c.arg(key).cursor_arg(0).arg("MATCH").arg(pattern);
-        c.iter(self)
+    ) -> RedisResult<crate::commands::scan::SyncScanIter<'_, Self, RV>> {
+        let mut prefix = vec![b"ZSCAN".to_vec()];
+        key.write_redis_args(&mut prefix);
+        let mut suffix = vec![b"MATCH".to_vec()];
+        pattern.write_redis_args(&mut suffix);
+        crate::commands::scan::SyncScanIter::new(self, prefix, suffix)
     }        }
     };
 }
@@ -292,7 +350,7 @@ implement_glide_commands! {
     fn set_options<K: ToRedisArgs, V: ToRedisArgs>(key: K, value: V, options: SetOptions);
     /// `MSET`.
     #[allow(deprecated)]
-    #[deprecated(since = "0.22.4", note = "use mset() (same command)")]
+    #[deprecated(since = "0.2.0", note = "use mset() (same command)")]
     fn set_multiple<K: ToRedisArgs, V: ToRedisArgs>(items: &'a [(K, V)]);
     /// `MSET`.
     fn mset<K: ToRedisArgs, V: ToRedisArgs>(items: &'a [(K, V)]);
@@ -310,7 +368,7 @@ implement_glide_commands! {
     fn getrange<K: ToRedisArgs>(key: K, from: isize, to: isize);
     /// `SETRANGE`.
     fn setrange<K: ToRedisArgs, V: ToRedisArgs>(key: K, offset: isize, value: V);
-    /// `EX`.
+    /// `GETEX`.
     fn get_ex<K: ToRedisArgs>(key: K, expire_at: Expiry);
     /// `GETDEL`.
     fn get_del<K: ToRedisArgs>(key: K);

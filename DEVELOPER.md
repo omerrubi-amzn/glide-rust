@@ -63,10 +63,18 @@ src/
   routes.rs       cluster routing (Route -> RoutingInfo)
   value.rs        redis::Value -> typed Rust conversions (RESP2 + RESP3)
   executor.rs     CommandExecutor seam + custom_command
-  client.rs       GlideClient / GlideClusterClient (async)
+  client/
+    mod.rs        GlideClient / GlideClusterClient (async)
+    connection.rs typed Pipeline execution (PipelineExt::query_glide)
   pipeline_options.rs  Pipeline execution options (execute_pipeline)
+  script.rs       Script (SHA-caching EVALSHA with EVAL fallback)
+  telemetry.rs    OpenTelemetry config + init
   sync/mod.rs     blocking clients over a shared runtime
-  commands/       one module per command family (blanket-impl traits)
+  commands/
+    core.rs       the unified command table (AsyncCommands / Commands)
+    scan.rs       GLIDE-owned scan iterators
+    <family>.rs   extension traits (blanket impls over CommandExecutor)
+  command_mock/   server-free encoding/decoding tests for the extensions
 tests/
   common/mod.rs   ephemeral server + cluster harness
   it_*.rs         per-family live tests (one file per command family)
@@ -101,7 +109,10 @@ expands to both the async and the blocking method, delegating to the fork's
 To add or change an entry, edit the table directly — then run the
 signature-parity guard, which compares every entry against the vendored
 redis-rs fork's `implement_commands!` table (names, generic order, argument
-lists) and fails on any divergence:
+lists) and fails on any divergence. It also checks the `scan*` methods
+(names, generics, and arguments must match the fork's macro definitions;
+receivers and return types deliberately deviate — GLIDE-owned iterators on
+the owned-send path, see `src/commands/scan.rs`):
 
 ```bash
 python3 tools/verify_command_table.py   # standalone

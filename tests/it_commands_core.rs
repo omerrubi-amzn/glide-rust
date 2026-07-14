@@ -8,7 +8,7 @@
 
 mod common;
 
-use glide::{AsyncCommands, RedisResult, pipe};
+use glide::{AsyncCommands, PipelineExt, RedisResult, pipe};
 use std::collections::{HashMap, HashSet};
 
 // ---- typed AsyncCommands methods -----------------------------------------------
@@ -133,8 +133,8 @@ matrix_test!(zrange_withscores_decodes, c, {
 
 // ---- pipelines & transactions ------------------------------------------------
 
-matrix_test!(pipeline_query_async, c, {
-    let mut c = c;
+matrix_test!(pipeline_query_glide, c, {
+    let c = c;
     let k1 = common::tkey("cmd_pipe", "k1");
     let k2 = common::tkey("cmd_pipe", "k2");
     let (v1, v2): (String, i64) = pipe()
@@ -144,21 +144,21 @@ matrix_test!(pipeline_query_async, c, {
         .ignore()
         .get(&k1)
         .get(&k2)
-        .query_async(&mut c)
+        .query_glide(&c)
         .await
         .unwrap();
     assert_eq!(v1, "hello");
     assert_eq!(v2, 7);
 });
 
-matrix_test!(atomic_transaction_query_async, c, {
-    let mut c = c;
+matrix_test!(atomic_transaction_query_glide, c, {
+    let c = c;
     let k = common::tkey("cmd_tx", "ctr");
     let (a, b): (i64, i64) = pipe()
         .atomic()
         .incr(&k, 1)
         .incr(&k, 1)
-        .query_async(&mut c)
+        .query_glide(&c)
         .await
         .unwrap();
     assert_eq!((a, b), (1, 2));
@@ -183,14 +183,14 @@ matrix_test!(wrong_type_returns_redis_error, c, {
 matrix_test!(error_inside_pipeline_surfaces_as_err, c, {
     // A mid-pipeline server error must surface as Err (glide-core's
     // raise_on_error path ≙ the fork's `make_pipeline_results` extraction).
-    let mut c = c;
+    let c = c;
     let k = common::tkey("cmd_pipe_err", "k");
     c.set::<_, _, ()>(&k, "text").await.unwrap();
     let res: RedisResult<(String, Vec<String>, String)> = pipe()
         .get(&k)
         .lrange(&k, 0, -1) // WRONGTYPE in the middle
         .get(&k)
-        .query_async(&mut c)
+        .query_glide(&c)
         .await;
     let err = res.unwrap_err();
     assert_eq!(err.code(), Some("WRONGTYPE"), "got: {err}");
@@ -198,14 +198,14 @@ matrix_test!(error_inside_pipeline_surfaces_as_err, c, {
 
 matrix_test!(error_inside_transaction_surfaces_as_err, c, {
     // Same for an atomic transaction: EXEC's per-command error must become Err.
-    let mut c = c;
+    let c = c;
     let k = common::tkey("cmd_tx_err", "k");
     c.set::<_, _, ()>(&k, "text").await.unwrap();
     let res: RedisResult<(String, Vec<String>)> = pipe()
         .atomic()
         .get(&k)
         .lrange(&k, 0, -1) // WRONGTYPE inside MULTI/EXEC
-        .query_async(&mut c)
+        .query_glide(&c)
         .await;
     let err = res.unwrap_err();
     assert_eq!(err.code(), Some("WRONGTYPE"), "got: {err}");
@@ -214,7 +214,7 @@ matrix_test!(error_inside_transaction_surfaces_as_err, c, {
 // ---- scan iterators (standalone only: cursor iteration is per-node) -----------
 
 resp_test!(scan_match_iterator, c, {
-    let mut c = c;
+    let c = c;
     let prefix = common::key("cmd_scan");
     for i in 0..10 {
         c.set::<_, _, ()>(format!("{prefix}:{i}"), i).await.unwrap();

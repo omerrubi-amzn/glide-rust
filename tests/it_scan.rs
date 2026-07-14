@@ -10,16 +10,16 @@ use glide::AsyncCommands;
 use glide::commands::options::ObjectType;
 use std::collections::HashSet;
 
-/// Drive SCAN to completion using raw commands (cursor + MATCH + COUNT + TYPE),
-/// collecting every returned key.
+/// Drive SCAN to completion using raw commands (cursor + MATCH + COUNT + TYPE)
+/// through the typed owned-send escape hatch, collecting every returned key.
 async fn scan_all<C>(
-    c: &mut C,
+    c: &C,
     pattern: Option<&str>,
     count: Option<i64>,
     type_filter: Option<ObjectType>,
 ) -> HashSet<Vec<u8>>
 where
-    C: redis::aio::ConnectionLike + Send + Sync + Sized,
+    C: AsyncCommands,
 {
     let mut cursor: u64 = 0;
     let mut seen = HashSet::new();
@@ -42,7 +42,7 @@ where
                 ObjectType::Stream => "stream",
             });
         }
-        let result: (u64, Vec<Vec<u8>>) = cmd.query_async(c).await.unwrap();
+        let result: (u64, Vec<Vec<u8>>) = c.glide_send(cmd).await.unwrap();
         for k in result.1 {
             seen.insert(k);
         }
@@ -63,8 +63,7 @@ resp_test!(scan_full_iteration, c, {
         expected.insert(k.into_bytes());
     }
     // Small COUNT forces multiple round-trips.
-    let mut mc = c.clone();
-    let seen = scan_all(&mut mc, None, Some(10), None).await;
+    let seen = scan_all(&c, None, Some(10), None).await;
     // Every inserted key must appear (SCAN may return duplicates, but the set
     // must be a superset of what we inserted).
     for k in &expected {
@@ -79,8 +78,7 @@ resp_test!(scan_match_pattern, c, {
         let _: () = c.set(format!("{prefix}:skip:{i}"), "v").await.unwrap();
     }
     let pattern = format!("{prefix}:keep:*");
-    let mut mc = c.clone();
-    let seen = scan_all(&mut mc, Some(&pattern), Some(5), None).await;
+    let seen = scan_all(&c, Some(&pattern), Some(5), None).await;
     assert_eq!(seen.len(), 20);
     assert!(
         seen.iter()
@@ -95,8 +93,7 @@ resp_test!(scan_count_hint, c, {
     }
     // A large COUNT should still return all keys across iteration.
     let pattern = format!("{prefix}:*");
-    let mut mc = c.clone();
-    let seen = scan_all(&mut mc, Some(&pattern), Some(1000), None).await;
+    let seen = scan_all(&c, Some(&pattern), Some(1000), None).await;
     assert_eq!(seen.len(), 50);
 });
 
@@ -109,8 +106,7 @@ resp_test!(scan_type_filter, c, {
         let _: i64 = c.rpush(format!("{prefix}:list:{i}"), &["a"]).await.unwrap();
     }
     let pattern = format!("{prefix}:*");
-    let mut mc = c.clone();
-    let strings = scan_all(&mut mc, Some(&pattern), Some(20), Some(ObjectType::String)).await;
+    let strings = scan_all(&c, Some(&pattern), Some(20), Some(ObjectType::String)).await;
     assert!(
         strings
             .iter()
@@ -122,7 +118,6 @@ resp_test!(scan_type_filter, c, {
 resp_test!(scan_empty_keyspace, c, {
     // A pattern that matches nothing returns no keys and terminates.
     let pattern = common::key("nomatch");
-    let mut mc = c.clone();
-    let seen = scan_all(&mut mc, Some(&pattern), Some(10), None).await;
+    let seen = scan_all(&c, Some(&pattern), Some(10), None).await;
     assert!(seen.is_empty());
 });

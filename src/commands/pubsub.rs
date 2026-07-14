@@ -1,10 +1,12 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
-//! Pub/Sub publishing and introspection commands.
+//! Pub/Sub subscription management and introspection commands.
 //!
-//! This covers the command-level Pub/Sub surface (`PUBLISH`, `SPUBLISH`, and the
-//! `PUBSUB` introspection subcommands). Receiving messages via a subscription is
-//! configured on the client connection (see the configuration types), not through
-//! these commands.
+//! This covers runtime (un)subscription (`SUBSCRIBE`/`PSUBSCRIBE`/`SSUBSCRIBE`
+//! and counterparts), shard publishing (`SPUBLISH`), and the `PUBSUB`
+//! introspection subcommands. Plain `PUBLISH` lives in the unified command API
+//! ([`crate::AsyncCommands::publish`]). Receiving messages via a subscription
+//! is delivered through the client (`get_pubsub_message`), not through these
+//! commands.
 
 use crate::error::Result;
 use crate::executor::CommandExecutor;
@@ -13,7 +15,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use redis::{Cmd, ToRedisArgs};
 
-/// Pub/Sub commands (`PUBLISH`, `SPUBLISH`, `PUBSUB ...`).
+/// Pub/Sub commands (`SUBSCRIBE`/`UNSUBSCRIBE` at runtime, `SPUBLISH`,
+/// `PUBSUB ...`).
 #[async_trait]
 pub trait PubSubCommands: CommandExecutor {
     /// Subscribe to one or more exact channels at runtime (`SUBSCRIBE`).
@@ -75,17 +78,10 @@ pub trait PubSubCommands: CommandExecutor {
         Ok(())
     }
 
-    /// Publish `message` to `channel` (`PUBLISH`). Returns the number of clients
-    /// that received the message.
-    async fn publish<C: ToRedisArgs + Send, M: ToRedisArgs + Send>(
-        &self,
-        channel: C,
-        message: M,
-    ) -> Result<i64> {
-        let mut cmd = Cmd::new();
-        cmd.arg("PUBLISH").arg(channel).arg(message);
-        value::to_i64(self.execute_command(cmd, None).await?)
-    }
+    // NOTE: no `publish` here — `PUBLISH` lives in the unified command table
+    // (`crate::AsyncCommands::publish`). Duplicating it in this trait would
+    // make `.publish(...)` ambiguous (E0034) whenever both traits are in
+    // scope, breaking `use glide::*`.
 
     /// Publish `message` to a shard `channel` (`SPUBLISH`, cluster). Returns the
     /// number of clients that received the message.

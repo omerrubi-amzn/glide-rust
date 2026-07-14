@@ -16,7 +16,6 @@ pub trait GenericCommands: CommandExecutor {
     /// (cursor-style). Returns `(cursor, keys)`; a returned cursor of `"0"`
     /// indicates iteration is complete. For simple iteration prefer the
     /// unified [`crate::AsyncCommands::scan_match`] iterator.
-    /// A returned cursor of `"0"` indicates iteration is complete.
     async fn scan_cursor(
         &self,
         cursor: &str,
@@ -270,7 +269,12 @@ pub(crate) fn parse_scan_reply(reply: redis::Value) -> Result<(String, Vec<Bytes
                     .into_iter()
                     .map(value::to_bytes)
                     .collect::<Result<Vec<_>>>()?,
-                _ => Vec::new(),
+                redis::Value::Nil => Vec::new(),
+                other => {
+                    return Err(crate::error::GlideError::Request(format!(
+                        "unexpected SCAN keys shape: {other:?}"
+                    )));
+                }
             };
             Ok((cursor, keys))
         }

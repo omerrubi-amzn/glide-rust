@@ -48,32 +48,31 @@ fn command_table_matches_fork() {
     }
 }
 
-// ---- fork-trait escape path (P2-R2-1) ----------------------------------------
+// ---- generic-code locks --------------------------------------------------------
 //
-// The `feat!` commit swapped `glide::AsyncCommands`/`Commands` to GLIDE-owned
-// drop-ins, but promised the *literal* fork traits still work via
-// `glide::redis::*`. These tests compile-lock that promise (a generic function
-// bounded on the fork trait) and exercise it live.
+// The GLIDE clients are deliberately NOT `redis` connection objects (the
+// `ConnectionLike` interop cost a payload copy per command). What IS
+// guaranteed is that generic code can bound on GLIDE's own traits — these
+// tests compile-lock that contract and exercise it live.
 
-/// Generic over the literal fork async trait — proves downstream code bounded
-/// on `redis::aio::ConnectionLike`-derived `AsyncCommands` still compiles.
-async fn via_fork_async_trait<C: glide::redis::AsyncCommands>(
-    con: &mut C,
+/// Generic over GLIDE's async trait — proves downstream code can write
+/// client-agnostic helpers against `glide::AsyncCommands`.
+async fn via_glide_async_trait<C: glide::AsyncCommands>(
+    con: &C,
     key: &str,
 ) -> glide::RedisResult<i64> {
     con.set::<_, _, ()>(key, 7).await?;
     con.get(key).await
 }
 
-matrix_test!(fork_trait_escape_path_async, c, {
-    let mut c = c;
-    let k = common::key("rrs_fork_escape");
-    let v = via_fork_async_trait(&mut c, &k).await.unwrap();
+matrix_test!(generic_code_on_glide_async_trait, c, {
+    let k = common::key("rrs_glide_generic");
+    let v = via_glide_async_trait(&c, &k).await.unwrap();
     assert_eq!(v, 7);
 });
 
 #[test]
-fn fork_trait_escape_path_sync() {
+fn generic_code_on_glide_sync_trait() {
     let srv = match common::TestServer::start() {
         Some(s) => s,
         None => {
@@ -81,19 +80,19 @@ fn fork_trait_escape_path_sync() {
             return;
         }
     };
-    use glide::redis::Commands as ForkCommands;
+    use glide::Commands;
     use glide::sync::SyncGlideClient;
-    let mut c = SyncGlideClient::connect(glide::GlideClientConfiguration::with_address(
+    let c = SyncGlideClient::connect(glide::GlideClientConfiguration::with_address(
         "127.0.0.1",
         srv.port,
     ))
     .unwrap();
-    let k = common::key("rrs_fork_escape_sync");
-    // Generic bound on the literal fork blocking trait.
-    fn via_fork_sync_trait<C: ForkCommands>(con: &mut C, key: &str) -> glide::RedisResult<i64> {
+    let k = common::key("rrs_glide_generic_sync");
+    // Generic bound on GLIDE's blocking trait.
+    fn via_glide_sync_trait<C: Commands>(con: &C, key: &str) -> glide::RedisResult<i64> {
         con.set::<_, _, ()>(key, 9)?;
         con.get(key)
     }
-    let v = via_fork_sync_trait(&mut c, &k).unwrap();
+    let v = via_glide_sync_trait(&c, &k).unwrap();
     assert_eq!(v, 9);
 }

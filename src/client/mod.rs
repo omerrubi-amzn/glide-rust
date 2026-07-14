@@ -187,8 +187,8 @@ impl GlideClient {
         &self.inner
     }
 
-    /// The configured logical database index (crate-internal; used by the sync
-    /// layer's `ConnectionLike` impl).
+    /// The configured logical database index (crate-internal; reported to
+    /// the pipeline adapter in `client/connection.rs`).
     pub(crate) fn db(&self) -> i64 {
         self.db
     }
@@ -240,11 +240,11 @@ impl GlideClient {
         }
     }
 
-    /// Execute a the `redis` fork [`redis::Pipeline`] with GLIDE execution options
+    /// Execute a [`redis::Pipeline`] with GLIDE execution options
     /// (per-call timeout, pipeline retry policy) and return the raw per-command
     /// replies. Build with [`crate::pipe()`]; `.atomic()` pipelines run as a
     /// `MULTI`/`EXEC` transaction. For plain typed execution prefer
-    /// [`redis::Pipeline::query_async`]. When `raise_on_error` is `true`, the
+    /// [`PipelineExt::query_glide`]. When `raise_on_error` is `true`, the
     /// first errored command aborts with an error; otherwise error replies are
     /// returned inline.
     pub async fn execute_pipeline(
@@ -379,7 +379,7 @@ impl GlideClusterClient {
             .map_err(GlideError::from)
     }
 
-    /// Execute a the `redis` fork [`redis::Pipeline`] with GLIDE execution options,
+    /// Execute a [`redis::Pipeline`] with GLIDE execution options,
     /// optionally routed. See [`crate::GlideClient::execute_pipeline`].
     pub async fn execute_pipeline(
         &self,
@@ -489,6 +489,8 @@ impl CommandExecutor for GlideClusterClient {
 }
 
 mod connection;
+
+pub use connection::{GlidePipelineTarget, PipelineExt};
 
 // ---- unified command API dispatch ---------------------------------------------
 //

@@ -8,6 +8,11 @@ with the same name, the same generic parameters (names, bounds, and order —
 turbofish compatibility), and the same argument list. Extra entries on our
 side are also flagged (they would silently diverge from the parity contract).
 
+The scan-iterator methods (`scan`/`scan_match`/`hscan`/... — defined in the
+macro *body* on both sides, not as table entries) are verified too, against
+the fork's definitions in commands/macros.rs: same generics and arguments,
+present in both the async and blocking flavors.
+
 Exit code 0 = parity holds; 1 = divergence (differences printed).
 Run from the crate root; the fork is resolved via `cargo metadata`
 (or pass its commands/mod.rs path as argv[1]).
@@ -80,6 +85,11 @@ def parse_fork(path: str):
             li += 1
         sig1 = " ".join(sig.split())
         m = re.match(r"fn\s+([a-z_0-9]+)\s*(?:<([^>]*)>)?\s*\((.*?)\)\s*\{", sig1)
+        if not m:
+            sys.exit(
+                "unparseable fork table entry (did the fork's table style "
+                f"change on a rev bump?):\n  {sig1[:160]}"
+            )
         out[m.group(1)] = norm_sig(m.group(2) or "", m.group(3).strip())
     return out
 
@@ -96,8 +106,78 @@ def parse_ours(path: str):
     return out
 
 
+# The scan-family methods live in the macro *body* (both here and in the
+# fork), so the table parsers above never see them. GLIDE's scan methods
+# DELIBERATELY deviate from the fork in receiver (&self vs &mut self) and
+# return type (GLIDE-owned iterators on the owned-send path — see
+# src/commands/scan.rs); what must stay in lockstep with the fork is the
+# method NAMES, the generic parameters (minus GLIDE's added lifetimes/Send
+# bounds), and the argument lists.
+SCAN_RE = re.compile(
+    r"fn\s+((?:[hsz])?scan(?:_match)?)\s*<([^>]*)>\s*\(([^)]*)\)", re.S
+)
+
+
+def _norm_scan_generics(gen: str) -> tuple:
+    """Generic params normalized: lifetimes dropped, `Send`/lifetime bounds
+    (GLIDE's deliberate additions) stripped, `redis::` qualifiers removed."""
+    out = []
+    for part in filter(None, (p.strip() for p in gen.split(","))):
+        if part.startswith("'"):
+            continue  # lifetime param (GLIDE-side addition)
+        name, _, bounds = part.partition(":")
+        kept = [
+            b.strip().replace("redis::", "")
+            for b in bounds.split("+")
+            if b.strip() and b.strip() != "Send" and not b.strip().startswith("'")
+        ]
+        out.append((name.strip(), " + ".join(kept)))
+    return tuple(out)
+
+
+def parse_scan_methods(src: str):
+    """name -> list of normalized (generics, args) — one element per trait
+    flavor (blocking + async) the method is defined in. `self` receivers,
+    `redis::` qualifiers, and GLIDE's added lifetime/Send bounds are
+    normalized away."""
+    out = {}
+    for m in SCAN_RE.finditer(src):
+        name, gen, args = m.group(1), m.group(2), m.group(3)
+        args = ",".join(a for a in args.split(",") if "self" not in a)
+        args = " ".join(args.replace("redis::", "").split())
+        out.setdefault(name, []).append(
+            (_norm_scan_generics(gen), norm_sig("", args)[1])
+        )
+    return out
+
+
+def check_scan_methods(fork_mod_rs: str, problems: list):
+    macros_rs = os.path.join(os.path.dirname(fork_mod_rs), "macros.rs")
+    if not os.path.exists(macros_rs):
+        sys.exit(f"fork macros.rs not found next to the table: {macros_rs}")
+    fork = parse_scan_methods(open(macros_rs).read())
+    ours = parse_scan_methods(open("src/commands/core.rs").read())
+    for name, sigs in fork.items():
+        f, o = set(sigs), set(ours.get(name, []))
+        if not o:
+            problems.append(f"MISSING scan method in ours: {name}")
+        elif o != f:
+            problems.append(
+                f"SCAN SIGNATURE DIFF {name}:\n  fork: {sorted(f)}\n  ours: {sorted(o)}"
+            )
+        elif len(ours[name]) != 2:
+            problems.append(
+                f"scan method {name} defined {len(ours[name])}x in ours "
+                "(expected exactly 2: async + blocking flavors)"
+            )
+    for name in ours:
+        if name not in fork:
+            problems.append(f"EXTRA scan method in ours (not in fork): {name}")
+
+
 def main():
-    fork = parse_fork(resolve_fork_mod_rs())
+    fork_mod_rs = resolve_fork_mod_rs()
+    fork = parse_fork(fork_mod_rs)
     ours = parse_ours("src/commands/core.rs")
     problems = []
     for name, sig in fork.items():
@@ -108,12 +188,16 @@ def main():
     for name in ours:
         if name not in fork:
             problems.append(f"EXTRA in ours (not in fork table): {name}")
+    check_scan_methods(fork_mod_rs, problems)
     if problems:
         print(f"PARITY VIOLATIONS ({len(problems)}):")
         for p in problems:
             print(" -", p)
         sys.exit(1)
-    print(f"parity OK: {len(fork)} methods match the fork table exactly")
+    print(
+        f"parity OK: {len(fork)} methods match the fork table exactly; "
+        "scan iterators match the fork's macro definitions"
+    )
 
 
 if __name__ == "__main__":

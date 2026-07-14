@@ -133,9 +133,7 @@ timed_tokio_test!(
         subscriber.subscribe(&[chan.as_str()]).await.unwrap();
         tokio::time::sleep(Duration::from_millis(300)).await;
 
-        let n = PubSubCommands::publish(&publisher, &chan, "hello")
-            .await
-            .unwrap();
+        let n: i64 = publisher.publish(&chan, "hello").await.unwrap();
         assert!(n >= 1, "expected >=1 subscriber, got {n}");
 
         let msg = tokio::time::timeout(Duration::from_secs(3), subscriber.get_pubsub_message())

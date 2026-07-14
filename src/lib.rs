@@ -62,8 +62,9 @@ pub use redis::Value;
 
 // ---- `redis` crate re-exports ----
 //
-// `GlideClient` / `GlideClusterClient` implement `redis::aio::ConnectionLike`,
-// so the full `redis` typed API works on them directly. Downstream crates
+// GLIDE's unified command traits are source-compatible with the fork's
+// command surface, and their signatures reference fork types
+// (`ToRedisArgs`, `FromRedisValue`, `SetOptions`, ...). Downstream crates
 // depend on `glide-rust` only — the vendored `redis` fork is a transitive git
 // dependency they cannot name — so re-export everything a migrating codebase
 // needs:
@@ -78,6 +79,10 @@ pub use redis::Value;
 // # Ok(()) }
 // ```
 
+/// Typed [`Pipeline`] execution on the async clients with zero extra payload
+/// copies (`pipe()...query_glide(&client)`); the blocking counterpart lives
+/// at `sync::PipelineExt`.
+pub use client::{GlidePipelineTarget, PipelineExt};
 /// GLIDE's async command API (source-compatible with the redis-rs fork,
 /// v0.25.2 — see `commands::core`). Commands travel GLIDE's native
 /// zero-extra-copy path.
@@ -85,16 +90,25 @@ pub use commands::core::AsyncCommands;
 /// GLIDE's blocking command API (see [`AsyncCommands`]).
 #[cfg(feature = "sync")]
 pub use commands::core::Commands;
+/// GLIDE's cursor-driven scan iterators, returned by the `scan*` methods.
+pub use commands::scan::ScanIter;
+/// Blocking counterpart of [`ScanIter`] (implements [`Iterator`]).
+#[cfg(feature = "sync")]
+pub use commands::scan::SyncScanIter;
 /// The **whole vendored `redis` crate**, re-exported. Downstream crates cannot
 /// name the git-dep fork directly, and the curated flat re-exports above are
 /// deliberately incomplete where names collide with other exported types
-/// (`redis::SetOptions`, `redis::Expiry`, the
-/// `ConnectionLike` traits, `AsyncIter`, …). Everything is reachable as
+/// (`redis::SetOptions`, `redis::Expiry`, ...). Everything is reachable as
 /// `glide::redis::…` with zero collision risk:
 ///
 /// ```rust,no_run
-/// use glide::redis::{AsyncIter, Expiry, SetOptions};
+/// use glide::redis::{Expiry, SetOptions};
 /// ```
+///
+/// Note: the GLIDE clients are deliberately **not** `redis` connection
+/// objects (no `ConnectionLike`) — that interop layer cost a payload copy
+/// per command. Use the unified traits, [`PipelineExt::query_glide`], or
+/// [`CustomCommand::custom_command`] instead.
 ///
 /// **Semver note:** this makes the fork's API part of this crate's public
 /// surface — bumping the pinned fork rev is a breaking change.
@@ -107,7 +121,8 @@ pub use redis::{ConnectionAddr, ConnectionInfo, IntoConnectionInfo};
 pub use redis::{Direction, LposOptions};
 /// Error and conversion types (`RedisResult`, `FromRedisValue`, …).
 pub use redis::{ErrorKind, FromRedisValue, RedisError, RedisResult, ToRedisArgs, cmd};
-/// Pipeline / transaction support (`pipe()`, `Pipeline::query_async`).
+/// Pipeline / transaction builder (`pipe()`; run with
+/// [`PipelineExt::query_glide`] or `execute_pipeline`).
 pub use redis::{Pipeline, pipe};
 /// Lua script helper (`Script` — SHA-caching `EVALSHA` with `EVAL` fallback).
 pub use script::{Script, ScriptInvocation};

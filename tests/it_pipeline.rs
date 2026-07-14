@@ -7,11 +7,11 @@
 //! (timeout, retry policy), and WATCH/MULTI framing via `custom_command`.
 //!
 //! Note: `execute_pipeline` returns the **raw** per-command replies —
-//! `.ignore()` markers only affect typed decoding via `query_async`.
+//! `.ignore()` markers only affect typed decoding via `query_glide`.
 
 mod common;
 
-use glide::{AsyncCommands, CustomCommand, PipelineOptions, pipe};
+use glide::{AsyncCommands, CustomCommand, PipelineExt, PipelineOptions, pipe};
 
 #[tokio::test]
 async fn atomic_transaction_ordered_results() {
@@ -253,18 +253,18 @@ async fn non_atomic_mixed_reads_writes_ordered() {
 }
 
 #[tokio::test]
-async fn typed_pipeline_query_async_still_works() {
-    // The typed redis-rs decode path (`.ignore()` filtering, tuple decode)
-    // remains available alongside execute_pipeline.
+async fn typed_pipeline_query_glide_still_works() {
+    // The typed decode path (`.ignore()` filtering, tuple decode) remains
+    // available alongside execute_pipeline, via `query_glide`.
     let srv = server_or_skip!();
-    let mut c = srv.client().await;
+    let c = srv.client().await;
     let k = common::key("b_typed");
     let (v, n): (String, i64) = pipe()
         .set(&k, "x")
         .ignore()
         .get(&k)
         .incr(common::key("b_typed_ctr"), 5)
-        .query_async(&mut c)
+        .query_glide(&c)
         .await
         .unwrap();
     assert_eq!((v.as_str(), n), ("x", 5));

@@ -16,10 +16,11 @@
 //! `invoke_async` / `invoke` first attempt `EVALSHA`
 //! (cheap, cached) and transparently fall back to `EVAL` (which also loads the
 //! script) when the server does not know the hash (`NOSCRIPT`); `load_async` /
-//! `load` populate the script cache explicitly. Async methods work with any
-//! [`redis::aio::ConnectionLike`] ([`crate::GlideClient`] /
-//! [`crate::GlideClusterClient`]); blocking methods work with any
-//! [`redis::ConnectionLike`] (the sync clients).
+//! `load` populate the script cache explicitly. Invocations ride the unified
+//! command API's zero-extra-copy path: async methods take any
+//! [`crate::AsyncCommands`] implementor ([`crate::GlideClient`] /
+//! [`crate::GlideClusterClient`]); blocking methods take any `glide::Commands`
+//! implementor (the sync clients).
 
 use crate::commands::core::AsyncCommands;
 use redis::{ErrorKind, FromRedisValue, RedisResult, ToRedisArgs, cmd};

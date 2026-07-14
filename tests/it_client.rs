@@ -6,7 +6,6 @@
 mod common;
 
 use glide::client::{ClusterScanCursor, PubSubMessageKind};
-use glide::commands::pubsub::PubSubCommands;
 use glide::config::{PubSubChannelMode, PubSubSubscriptions};
 use glide::{AsyncCommands, GlideClient, GlideClientConfiguration, Route};
 use redis::Cmd;
@@ -35,9 +34,7 @@ timed_tokio_test!(
             common::wait_for_numsub(&publisher, &channel, |n| n >= 1, Duration::from_secs(3)).await,
             "subscription was not registered server-side in time"
         );
-        let n = PubSubCommands::publish(&publisher, &channel, "hello")
-            .await
-            .unwrap();
+        let n: i64 = publisher.publish(&channel, "hello").await.unwrap();
         assert!(n >= 1, "expected at least one receiver, got {n}");
 
         let msg = tokio::time::timeout(Duration::from_secs(3), subscriber.get_pubsub_message())
@@ -66,9 +63,7 @@ timed_tokio_test!(
             common::wait_for_numpat(&publisher, |n| n >= 1, Duration::from_secs(3)).await,
             "pattern subscription was not registered server-side in time"
         );
-        PubSubCommands::publish(&publisher, "news.tech", "breaking")
-            .await
-            .unwrap();
+        let _: i64 = publisher.publish("news.tech", "breaking").await.unwrap();
 
         let msg = tokio::time::timeout(Duration::from_secs(3), subscriber.get_pubsub_message())
             .await

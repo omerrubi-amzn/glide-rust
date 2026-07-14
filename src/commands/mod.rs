@@ -5,6 +5,7 @@
 pub mod options;
 
 pub mod core;
+pub mod scan;
 
 pub mod bitmap;
 pub mod connection_management;

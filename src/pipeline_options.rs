@@ -3,7 +3,7 @@
 //!
 //! Pipelines are used directly: build with
 //! [`crate::pipe()`] (add `.atomic()` for a `MULTI`/`EXEC` transaction) and
-//! run with [`Pipeline::query_async`] / the sync
+//! run with [`crate::PipelineExt::query_glide`] (async) / the sync
 //! [`crate::sync::PipelineExt::query_glide`]. When GLIDE-specific execution
 //! controls are needed (per-call timeout, pipeline retry policy, cluster
 //! routing), use [`crate::GlideClient::execute_pipeline`] /
