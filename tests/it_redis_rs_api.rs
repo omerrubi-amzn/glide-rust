@@ -114,11 +114,13 @@ matrix_test!(zset_double_normalization_decodes, c, {
     assert_eq!(added, 2);
     let score: f64 = c.zscore(&k, "one").await.unwrap();
     assert_eq!(score, 1.5);
-    let incremented: f64 = c.zincr(&k, "one", 1.0).await.unwrap();
-    assert_eq!(incremented, 2.5);
+    // Increment by 0.4 (not 1.0): a 2.5/2.5 tie would make ZPOPMIN pop "one"
+    // (lexicographic tiebreak), which is not what this test wants to observe.
+    let incremented: f64 = c.zincr(&k, "one", 0.4).await.unwrap();
+    assert_eq!(incremented, 1.9);
     // ZPOPMIN reply is normalized; redis-rs decodes member/score pairs.
     let popped: Vec<(String, f64)> = c.zpopmin(&k, 1).await.unwrap();
-    assert_eq!(popped, vec![("two".to_string(), 2.5)]);
+    assert_eq!(popped, vec![("one".to_string(), 1.9)]);
 });
 
 matrix_test!(zrange_withscores_decodes, c, {
@@ -172,8 +174,43 @@ matrix_test!(wrong_type_returns_redis_error, c, {
     c.set::<_, _, ()>(&k, "text").await.unwrap();
     let res: RedisResult<Vec<String>> = c.lrange(&k, 0, -1).await;
     let err = res.unwrap_err();
-    // WRONGTYPE server error surfaces as a RedisError, exactly as in redis-rs.
-    assert!(err.to_string().contains("WRONGTYPE"), "got: {err}");
+    // Exact fork semantics: the vendored fork (unlike upstream redis-rs 0.25)
+    // does not map WRONGTYPE to ErrorKind::TypeError — server WRONGTYPE
+    // surfaces as ExtensionError with code() == "WRONGTYPE". Our compat path
+    // must be fork-faithful; assert both kind and code.
+    assert_eq!(err.kind(), glide::ErrorKind::ExtensionError, "got: {err}");
+    assert_eq!(err.code(), Some("WRONGTYPE"), "got: {err}");
+});
+
+matrix_test!(error_inside_pipeline_surfaces_as_err, c, {
+    // A mid-pipeline server error must surface as Err (glide-core's
+    // raise_on_error path ≙ redis-rs's `make_pipeline_results` extraction).
+    let mut c = c;
+    let k = common::tkey("rrs_pipe_err", "k");
+    c.set::<_, _, ()>(&k, "text").await.unwrap();
+    let res: RedisResult<(String, Vec<String>, String)> = pipe()
+        .get(&k)
+        .lrange(&k, 0, -1) // WRONGTYPE in the middle
+        .get(&k)
+        .query_async(&mut c)
+        .await;
+    let err = res.unwrap_err();
+    assert_eq!(err.code(), Some("WRONGTYPE"), "got: {err}");
+});
+
+matrix_test!(error_inside_transaction_surfaces_as_err, c, {
+    // Same for an atomic transaction: EXEC's per-command error must become Err.
+    let mut c = c;
+    let k = common::tkey("rrs_tx_err", "k");
+    c.set::<_, _, ()>(&k, "text").await.unwrap();
+    let res: RedisResult<(String, Vec<String>)> = pipe()
+        .atomic()
+        .get(&k)
+        .lrange(&k, 0, -1) // WRONGTYPE inside MULTI/EXEC
+        .query_async(&mut c)
+        .await;
+    let err = res.unwrap_err();
+    assert_eq!(err.code(), Some("WRONGTYPE"), "got: {err}");
 });
 
 // ---- scan iterators (standalone only: cursor iteration is per-node) -----------

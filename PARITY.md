@@ -207,6 +207,15 @@ provide naming shims (`get_message` alias) only.
 - Scan iterators run against the connected node — for cluster-wide iteration
   use our native `cluster_scan`.
 
+### Semver implication of re-exporting the fork
+
+The crate re-exports the vendored `redis` fork wholesale (`glide::redis::…`,
+plus curated flat re-exports), which makes the fork's public API part of
+**this crate's** public API surface. Consequently, **bumping the pinned fork
+rev is a potentially breaking change** of glide-rust and must be treated as
+such under semver (major/minor accordingly), even when no wrapper code
+changes.
+
 ### Open decisions
 
 1. Is the **adapter** (exact redis-rs API, opt-in) the parity story, making the 55

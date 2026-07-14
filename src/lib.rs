@@ -31,9 +31,9 @@ pub use executor::{CommandExecutor, CustomCommand};
 pub use routes::{Route, SlotType};
 
 pub use config::{
-    BackoffStrategy, GlideClientConfiguration, GlideClusterClientConfiguration, IamAuthConfig,
-    NodeAddress, NodeDiscoveryMode, PeriodicChecks, ProtocolVersion, PubSubChannelMode,
-    PubSubSubscriptions, ReadFrom, ServerCredentials, ServiceType, TlsConfig,
+    BackoffStrategy, ClientIdentity, GlideClientConfiguration, GlideClusterClientConfiguration,
+    IamAuthConfig, NodeAddress, NodeDiscoveryMode, PeriodicChecks, ProtocolVersion,
+    PubSubChannelMode, PubSubSubscriptions, ReadFrom, ServerCredentials, ServiceType, TlsConfig,
 };
 
 /// All command traits in one import.
@@ -79,6 +79,20 @@ pub use redis::Value;
 // # Ok(()) }
 // ```
 
+/// The **whole vendored `redis` crate**, re-exported. Downstream crates cannot
+/// name the git-dep fork directly, and the curated flat re-exports above are
+/// deliberately incomplete where names collide with native GLIDE types
+/// (`redis::SetOptions` vs [`SetOptions`], `redis::Expiry`, the
+/// `ConnectionLike` traits, `AsyncIter`, …). Everything is reachable as
+/// `glide::redis::…` with zero collision risk:
+///
+/// ```rust,no_run
+/// use glide::redis::{AsyncIter, Expiry, SetOptions};
+/// ```
+///
+/// **Semver note:** this makes the fork's API part of this crate's public
+/// surface — bumping the pinned fork rev is a breaking change (see PARITY.md).
+pub use redis;
 /// The redis-rs typed command trait, implemented by both GLIDE clients.
 pub use redis::AsyncCommands;
 /// The redis-rs **blocking** typed command trait, implemented by the sync

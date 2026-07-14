@@ -138,6 +138,92 @@ fn sync_pipeline_and_transaction() {
     assert_eq!((a, b), (1, 2));
 }
 
+#[test]
+fn sync_pipeline_with_literal_multi_exec_is_not_atomic() {
+    // A plain (non-atomic) pipeline containing literal MULTI/EXEC commands —
+    // manual transaction management, a real redis-rs pattern. Transaction
+    // detection is driven by the trait call's offset/count, so this must NOT
+    // be collapsed into a glide-core transaction: each command gets a reply.
+    let srv = server_or_skip!();
+    let mut c = SyncGlideClient::connect(GlideClientConfiguration::with_address(
+        "127.0.0.1",
+        srv.port,
+    ))
+    .unwrap();
+
+    let ctr = common::tkey("rrs_literal_tx", "ctr");
+    let (multi_ok, queued, exec_replies): (String, String, Vec<i64>) = glide::pipe()
+        .cmd("MULTI")
+        .cmd("INCR")
+        .arg(&ctr)
+        .cmd("EXEC")
+        .query(&mut c)
+        .unwrap();
+    assert_eq!(multi_ok, "OK");
+    assert_eq!(queued, "QUEUED");
+    assert_eq!(exec_replies, vec![1]);
+}
+
+#[test]
+fn sync_script_invoke_and_load() {
+    // Blocking Script API (P1 parity gap): invoke() + load() on the sync client.
+    let srv = server_or_skip!();
+    let mut c = SyncGlideClient::connect(GlideClientConfiguration::with_address(
+        "127.0.0.1",
+        srv.port,
+    ))
+    .unwrap();
+
+    let script = Script::new("return redis.call('SET', KEYS[1], ARGV[1])");
+    let k = common::key("rrs_sync_script");
+    let _: () = script.key(&k).arg("stored-sync").invoke(&mut c).unwrap();
+    let v: String = Commands::get(&mut c, &k).unwrap();
+    assert_eq!(v, "stored-sync");
+
+    // Typed return through the sync path.
+    let sum_script = Script::new("return tonumber(ARGV[1]) + tonumber(ARGV[2])");
+    let sum: i64 = sum_script.arg(20).arg(22).invoke(&mut c).unwrap();
+    assert_eq!(sum, 42);
+
+    // load() returns the script's SHA-1 and populates the server cache.
+    let hash = sum_script.load(&mut c).unwrap();
+    assert_eq!(hash, sum_script.get_hash());
+}
+
+resp_test!(script_load_async_returns_hash, c, {
+    let mut c = c;
+    let script = Script::new("return 7");
+    let hash = script.load_async(&mut c).await.unwrap();
+    assert_eq!(hash, script.get_hash());
+    // Loaded: EVALSHA now succeeds without fallback.
+    let v: i64 = cmd("EVALSHA")
+        .arg(script.get_hash())
+        .arg(0)
+        .query_async(&mut c)
+        .await
+        .unwrap();
+    assert_eq!(v, 7);
+});
+
+resp_test!(noscript_errorkind_passthrough, c, {
+    // redis-rs users `match err.kind()`; NOSCRIPT must surface as
+    // ErrorKind::NoScriptError outside the Script type's internal fallback.
+    let mut c = c;
+    let _: () = cmd("SCRIPT")
+        .arg("FLUSH")
+        .arg("SYNC")
+        .query_async(&mut c)
+        .await
+        .unwrap();
+    let err = cmd("EVALSHA")
+        .arg("0000000000000000000000000000000000000000")
+        .arg(0)
+        .query_async::<_, i64>(&mut c)
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), glide::ErrorKind::NoScriptError, "got: {err}");
+});
+
 // ---- normalized reply shapes: streams / geo / CONFIG GET ------------------------
 
 matrix_test!(config_get_decodes_to_map, c, {

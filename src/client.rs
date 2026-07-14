@@ -552,7 +552,14 @@ async fn compat_pipeline(
             .await?;
         match value {
             Value::Array(items) => Ok(items),
-            other => Ok(vec![other]),
+            // glide-core contracts an array of per-command replies for
+            // pipelines; anything else means the contract was violated —
+            // fail loudly rather than let the caller decode garbage.
+            other => Err(redis::RedisError::from((
+                redis::ErrorKind::ResponseError,
+                "unexpected non-array pipeline reply from glide-core",
+                format!("{other:?}"),
+            ))),
         }
     }
 }
@@ -561,7 +568,10 @@ impl redis::aio::ConnectionLike for GlideClient {
     fn req_packed_command<'a>(&'a mut self, cmd: &'a Cmd) -> redis::RedisFuture<'a, Value> {
         Box::pin(async move {
             // `send_command` needs `&mut Cmd` (compression / pubsub
-            // interception may rewrite it); the trait hands us `&Cmd`.
+            // interception may rewrite it); the trait hands us `&Cmd`, so a
+            // clone (one arg-buffer copy) per typed call is unavoidable
+            // without a glide-core `&Cmd` send path. Benchmarked: not
+            // measurable against the network round-trip (~40 µs loopback).
             let mut cmd = cmd.clone();
             self.inner.send_command(&mut cmd, None).await
         })
@@ -570,6 +580,11 @@ impl redis::aio::ConnectionLike for GlideClient {
     fn req_packed_commands<'a>(
         &'a mut self,
         cmd: &'a redis::Pipeline,
+        // `offset`/`count` describe the packed-bytes reply layout; the only
+        // fork-internal caller is `Pipeline::query_async`, and glide-core
+        // already returns exactly the contracted shape (one reply per
+        // command, or the single EXEC reply), so they are not needed here.
+        // The *sync* impl does use them (transaction detection).
         _offset: usize,
         _count: usize,
         pipeline_retry_strategy: Option<redis::PipelineRetryStrategy>,

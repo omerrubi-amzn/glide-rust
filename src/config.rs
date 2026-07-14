@@ -241,6 +241,47 @@ impl std::fmt::Debug for ServerCredentials {
     }
 }
 
+/// Client certificate + private key (both PEM) for **mutual TLS**.
+///
+/// Fields are private so a half-set identity (cert without key or vice versa)
+/// is unrepresentable. Build with [`Self::new`] or the configs'
+/// `client_identity(cert, key)` builder methods.
+#[derive(Clone)]
+pub struct ClientIdentity {
+    cert_pem: Vec<u8>,
+    key_pem: Vec<u8>,
+}
+
+impl ClientIdentity {
+    /// Create a client identity from certificate and private-key PEM bytes.
+    pub fn new(cert_pem: impl Into<Vec<u8>>, key_pem: impl Into<Vec<u8>>) -> Self {
+        ClientIdentity {
+            cert_pem: cert_pem.into(),
+            key_pem: key_pem.into(),
+        }
+    }
+
+    /// The client certificate (PEM bytes).
+    pub fn cert_pem(&self) -> &[u8] {
+        &self.cert_pem
+    }
+
+    pub(crate) fn key_pem(&self) -> &[u8] {
+        &self.key_pem
+    }
+}
+
+impl std::fmt::Debug for ClientIdentity {
+    /// Redacts the private key so it never leaks through `{:?}` (including via
+    /// the containing configuration's derived `Debug`).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientIdentity")
+            .field("cert_pem", &format_args!("[{} bytes]", self.cert_pem.len()))
+            .field("key_pem", &"<redacted>")
+            .finish()
+    }
+}
+
 /// AWS service backing IAM authentication.
 ///
 /// Mirrors Python's IAM `ServiceType`.
@@ -425,11 +466,10 @@ pub struct GlideClientConfiguration {
     /// under [`TlsConfig::SecureTls`]. Lowered into
     /// `ConnectionRequest::root_certs`. Empty = use the system trust store.
     pub root_certs: Vec<Vec<u8>>,
-    /// Client certificate (PEM bytes) for **mutual TLS**. Set together with
-    /// [`Self::client_key`] via [`Self::client_identity`].
-    pub client_cert: Option<Vec<u8>>,
-    /// Client private key (PEM bytes) for **mutual TLS**.
-    pub client_key: Option<Vec<u8>>,
+    /// Client certificate + private key for **mutual TLS**. Set via
+    /// [`Self::client_identity`]. Only meaningful together with
+    /// [`TlsConfig::SecureTls`].
+    pub client_identity: Option<ClientIdentity>,
 }
 
 impl GlideClientConfiguration {
@@ -451,8 +491,7 @@ impl GlideClientConfiguration {
             pubsub_subscriptions: None,
             force_pubsub_channel: false,
             root_certs: Vec::new(),
-            client_cert: None,
-            client_key: None,
+            client_identity: None,
         }
     }
 
@@ -501,8 +540,7 @@ impl GlideClientConfiguration {
         cert_pem: impl Into<Vec<u8>>,
         key_pem: impl Into<Vec<u8>>,
     ) -> Self {
-        self.client_cert = Some(cert_pem.into());
-        self.client_key = Some(key_pem.into());
+        self.client_identity = Some(ClientIdentity::new(cert_pem, key_pem));
         self
     }
 
@@ -610,9 +648,9 @@ impl GlideClientConfiguration {
         );
         req.cluster_mode_enabled = false;
         req.database_id = self.database_id;
-        if let (Some(cert), Some(key)) = (&self.client_cert, &self.client_key) {
-            req.client_cert = cert.clone();
-            req.client_key = key.clone();
+        if let Some(identity) = &self.client_identity {
+            req.client_cert = identity.cert_pem().to_vec();
+            req.client_key = identity.key_pem().to_vec();
         }
         if let Some(subs) = &self.pubsub_subscriptions {
             req.pubsub_subscriptions = Some(subs.to_core());
@@ -660,11 +698,10 @@ pub struct GlideClusterClientConfiguration {
     /// under [`TlsConfig::SecureTls`]. Lowered into
     /// `ConnectionRequest::root_certs`. Empty = use the system trust store.
     pub root_certs: Vec<Vec<u8>>,
-    /// Client certificate (PEM bytes) for **mutual TLS**. Set together with
-    /// [`Self::client_key`] via [`Self::client_identity`].
-    pub client_cert: Option<Vec<u8>>,
-    /// Client private key (PEM bytes) for **mutual TLS**.
-    pub client_key: Option<Vec<u8>>,
+    /// Client certificate + private key for **mutual TLS**. Set via
+    /// [`Self::client_identity`]. Only meaningful together with
+    /// [`TlsConfig::SecureTls`].
+    pub client_identity: Option<ClientIdentity>,
 }
 
 impl GlideClusterClientConfiguration {
@@ -681,9 +718,10 @@ impl GlideClusterClientConfiguration {
     /// assert_eq!(cfg.addresses.len(), 2);
     /// ```
     ///
-    /// Credentials / protocol / client-name are taken from the **first** URL
-    /// (they must be identical across nodes, as in redis-rs). A URL selecting a
-    /// non-zero database is rejected — clusters only support database 0.
+    /// Credentials / client-name / database / TLS mode must be identical
+    /// across all URLs — conflicting settings are rejected with a
+    /// configuration error, as in redis-rs's `ClusterClient`. A URL selecting
+    /// a non-zero database is rejected — clusters only support database 0.
     pub fn from_urls<T: redis::IntoConnectionInfo>(
         urls: impl IntoIterator<Item = T>,
     ) -> crate::error::Result<Self> {
@@ -695,8 +733,38 @@ impl GlideClusterClientConfiguration {
                 .map_err(|e| crate::error::GlideError::Configuration(e.to_string()))?;
             let (address, tls) = split_connection_addr(info.addr)?;
             addresses.push(address);
-            if first.is_none() {
-                first = Some((tls, info.redis));
+            // Reject conflicting per-URL settings, matching the fork's
+            // `ClusterClient` validation — silently ignoring the settings of
+            // URLs 2..N would misconfigure the client.
+            match &first {
+                None => first = Some((tls, info.redis)),
+                Some((first_tls, first_redis)) => {
+                    if info.redis.password != first_redis.password {
+                        return Err(crate::error::GlideError::Configuration(
+                            "Cannot use different password among initial nodes.".into(),
+                        ));
+                    }
+                    if info.redis.username != first_redis.username {
+                        return Err(crate::error::GlideError::Configuration(
+                            "Cannot use different username among initial nodes.".into(),
+                        ));
+                    }
+                    if info.redis.client_name != first_redis.client_name {
+                        return Err(crate::error::GlideError::Configuration(
+                            "Cannot use different client_name among initial nodes.".into(),
+                        ));
+                    }
+                    if info.redis.db != first_redis.db {
+                        return Err(crate::error::GlideError::Configuration(
+                            "Cannot use different database among initial nodes.".into(),
+                        ));
+                    }
+                    if tls != *first_tls {
+                        return Err(crate::error::GlideError::Configuration(
+                            "Cannot use different TLS modes among initial nodes.".into(),
+                        ));
+                    }
+                }
             }
         }
         let Some((tls, redis_info)) = first else {
@@ -725,8 +793,7 @@ impl GlideClusterClientConfiguration {
         cert_pem: impl Into<Vec<u8>>,
         key_pem: impl Into<Vec<u8>>,
     ) -> Self {
-        self.client_cert = Some(cert_pem.into());
-        self.client_key = Some(key_pem.into());
+        self.client_identity = Some(ClientIdentity::new(cert_pem, key_pem));
         self
     }
 
@@ -748,8 +815,7 @@ impl GlideClusterClientConfiguration {
             pubsub_subscriptions: None,
             force_pubsub_channel: false,
             root_certs: Vec::new(),
-            client_cert: None,
-            client_key: None,
+            client_identity: None,
         }
     }
 
@@ -855,9 +921,9 @@ impl GlideClusterClientConfiguration {
         );
         req.cluster_mode_enabled = true;
         req.periodic_checks = Some(self.periodic_checks.into());
-        if let (Some(cert), Some(key)) = (&self.client_cert, &self.client_key) {
-            req.client_cert = cert.clone();
-            req.client_key = key.clone();
+        if let Some(identity) = &self.client_identity {
+            req.client_cert = identity.cert_pem().to_vec();
+            req.client_key = identity.key_pem().to_vec();
         }
         if let Some(subs) = &self.pubsub_subscriptions {
             req.pubsub_subscriptions = Some(subs.to_core());
@@ -878,8 +944,21 @@ fn split_connection_addr(
             host,
             port,
             insecure,
-            ..
+            tls_params,
         } => {
+            // The fork's `TlsConnParams` fields (root cert store, client
+            // identity) are `pub(crate)` — we cannot read them to map onto
+            // `root_certs` / `client_identity`. Silently dropping them would
+            // yield a mysteriously misconfigured connection (wrong trust
+            // roots, mTLS not attempted), so fail loudly instead.
+            if tls_params.is_some() {
+                return Err(crate::error::GlideError::Configuration(
+                    "ConnectionInfo carries TLS certificate parameters (TlsCertificates) that \
+                     cannot be mapped; configure them via the config's `root_certs` field and \
+                     `client_identity(cert, key)` instead"
+                        .into(),
+                ));
+            }
             let tls = if insecure {
                 TlsConfig::InsecureTls
             } else {
@@ -1783,6 +1862,46 @@ mod tests {
     fn from_urls_cluster_rejects_db_and_empty() {
         assert!(GlideClusterClientConfiguration::from_urls(["redis://n1:7000/5"]).is_err());
         assert!(GlideClusterClientConfiguration::from_urls(Vec::<&str>::new()).is_err());
+        // A non-zero db on any URL (not just the first) is rejected.
+        assert!(
+            GlideClusterClientConfiguration::from_urls(["redis://n1:7000", "redis://n2:7001/5"])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn from_urls_cluster_rejects_conflicting_settings() {
+        // Matches the fork's `ClusterClient` validation: settings must be
+        // identical across all initial-node URLs.
+        assert!(
+            GlideClusterClientConfiguration::from_urls([
+                "redis://:pw1@n1:7000",
+                "redis://:pw2@n2:7001",
+            ])
+            .is_err(),
+            "different passwords must be rejected"
+        );
+        assert!(
+            GlideClusterClientConfiguration::from_urls([
+                "redis://u1:pw@n1:7000",
+                "redis://u2:pw@n2:7001",
+            ])
+            .is_err(),
+            "different usernames must be rejected"
+        );
+        assert!(
+            GlideClusterClientConfiguration::from_urls(["redis://n1:7000", "rediss://n2:7001"])
+                .is_err(),
+            "mixed TLS modes must be rejected"
+        );
+        // Identical settings on all URLs remain accepted.
+        assert!(
+            GlideClusterClientConfiguration::from_urls([
+                "redis://u:pw@n1:7000",
+                "redis://u:pw@n2:7001",
+            ])
+            .is_ok()
+        );
     }
 
     // ---- mutual TLS lowering ----
@@ -1811,5 +1930,27 @@ mod tests {
         let req = GlideClientConfiguration::with_address("h", 6379).to_request();
         assert!(req.client_cert.is_empty());
         assert!(req.client_key.is_empty());
+    }
+
+    #[test]
+    fn client_identity_debug_redacts_private_key() {
+        let key_material = "SUPER-SECRET-KEY-MATERIAL";
+        let cfg = GlideClientConfiguration::with_address("h", 6379)
+            .client_identity(b"cert-bytes".to_vec(), key_material.as_bytes().to_vec());
+        // Both the identity's own Debug and the config's derived Debug must
+        // redact the private key.
+        let identity_dbg = format!("{:?}", cfg.client_identity.as_ref().unwrap());
+        let config_dbg = format!("{cfg:?}");
+        for rendered in [&identity_dbg, &config_dbg] {
+            assert!(
+                rendered.contains("<redacted>"),
+                "missing redaction: {rendered}"
+            );
+            assert!(
+                !rendered.contains(key_material)
+                    && !rendered.contains(&format!("{:?}", key_material.as_bytes())),
+                "private key leaked through Debug: {rendered}"
+            );
+        }
     }
 }

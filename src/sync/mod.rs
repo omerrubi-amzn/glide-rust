@@ -281,7 +281,13 @@ fn unpack_commands(bytes: &[u8]) -> redis::RedisResult<Vec<redis::Cmd>> {
             .windows(2)
             .position(|w| w == b"\r\n")
             .ok_or_else(|| malformed("missing CRLF after length"))?;
-        let len = std::str::from_utf8(&rest[..end])
+        let digits = &rest[..end];
+        // Strictly ASCII digits: `parse::<usize>` alone would also accept a
+        // leading `+`, which is not valid RESP.
+        if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
+            return Err(malformed("invalid length"));
+        }
+        let len = std::str::from_utf8(digits)
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
             .ok_or_else(|| malformed("invalid length"))?;
@@ -295,11 +301,17 @@ fn unpack_commands(bytes: &[u8]) -> redis::RedisResult<Vec<redis::Cmd>> {
         let mut cmd = redis::Cmd::new();
         for _ in 0..argc {
             let (len, data_and_rest) = read_len(cur, b'$')?;
-            if data_and_rest.len() < len + 2 || &data_and_rest[len..len + 2] != b"\r\n" {
+            // `len` is attacker-controlled; `len + 2` must not overflow
+            // (usize::MAX would wrap to 1 in release and pass the bounds
+            // check below, panicking on the slice range).
+            let total = len
+                .checked_add(2)
+                .ok_or_else(|| malformed("length overflow"))?;
+            if data_and_rest.len() < total || &data_and_rest[len..total] != b"\r\n" {
                 return Err(malformed("truncated bulk string"));
             }
             cmd.arg(&data_and_rest[..len]);
-            cur = &data_and_rest[len + 2..];
+            cur = &data_and_rest[total..];
         }
         out.push(cmd);
         rest = cur;
@@ -317,21 +329,43 @@ fn is_bare_command(cmd: &redis::Cmd, name: &[u8]) -> bool {
 }
 
 /// Rebuild a logical [`redis::Pipeline`] from packed pipeline bytes.
-/// `encode_pipeline` wraps transactions in MULTI…EXEC; strip them and mark the
-/// pipeline atomic instead (glide-core re-adds MULTI/EXEC in
-/// `send_transaction`).
-fn unpack_pipeline(bytes: &[u8]) -> redis::RedisResult<redis::Pipeline> {
+///
+/// Whether the pipeline is an atomic transaction is decided from the trait
+/// call's `offset`/`count`, not by sniffing command names: the fork always
+/// calls `req_packed_commands(bytes, len + 1, 1)` for transactions and
+/// `(bytes, 0, len)` for plain pipelines (fork `pipeline.rs`). A plain
+/// pipeline may legitimately *contain* literal `MULTI`/`EXEC` commands
+/// (manual transaction management) and must not be misdetected as atomic.
+///
+/// For transactions, `encode_pipeline` wraps the commands in MULTI…EXEC;
+/// strip them (validating the wrapper) and mark the pipeline atomic instead —
+/// glide-core re-adds MULTI/EXEC in `send_transaction`.
+fn unpack_pipeline(
+    bytes: &[u8],
+    offset: usize,
+    count: usize,
+) -> redis::RedisResult<redis::Pipeline> {
     let mut commands = unpack_commands(bytes)?;
-    let is_transaction = commands.len() >= 2
-        && commands
-            .first()
-            .is_some_and(|c| is_bare_command(c, b"MULTI"))
-        && commands.last().is_some_and(|c| is_bare_command(c, b"EXEC"));
+    let is_transaction = offset > 0 && count == 1;
     let mut pipeline = redis::Pipeline::with_capacity(commands.len());
     if is_transaction {
+        // Validate the MULTI…EXEC wrapper the fork's `encode_pipeline`
+        // produces before stripping it.
+        let well_formed = commands.len() >= 2
+            && commands
+                .first()
+                .is_some_and(|c| is_bare_command(c, b"MULTI"))
+            && commands.last().is_some_and(|c| is_bare_command(c, b"EXEC"));
+        if !well_formed {
+            return Err(redis::RedisError::from((
+                redis::ErrorKind::ClientError,
+                "malformed packed transaction",
+                "expected MULTI…EXEC wrapper".to_string(),
+            )));
+        }
         pipeline.atomic();
         commands.pop(); // EXEC
-        commands.remove(0); // MULTI
+        commands.drain(..1); // MULTI
     }
     for cmd in commands {
         pipeline.add_command(cmd);
@@ -373,7 +407,7 @@ macro_rules! impl_sync_connection_like {
                 offset: usize,
                 count: usize,
             ) -> redis::RedisResult<Vec<Value>> {
-                let pipeline = unpack_pipeline(cmd)?;
+                let pipeline = unpack_pipeline(cmd, offset, count)?;
                 runtime().block_on(redis::aio::ConnectionLike::req_packed_commands(
                     &mut self.inner,
                     &pipeline,
@@ -424,7 +458,8 @@ mod compat_tests {
     fn unpack_pipeline_plain() {
         let mut p = redis::Pipeline::new();
         p.cmd("SET").arg("a").arg("1").cmd("GET").arg("a");
-        let pipeline = unpack_pipeline(&p.get_packed_pipeline()).unwrap();
+        // Plain pipelines are dispatched as (bytes, 0, len).
+        let pipeline = unpack_pipeline(&p.get_packed_pipeline(), 0, 2).unwrap();
         assert!(!pipeline.is_atomic());
         assert_eq!(pipeline.len(), 2);
     }
@@ -433,8 +468,59 @@ mod compat_tests {
     fn unpack_pipeline_transaction_strips_multi_exec() {
         let mut p = redis::Pipeline::new();
         p.atomic().cmd("INCR").arg("c").cmd("INCR").arg("c");
-        let pipeline = unpack_pipeline(&p.get_packed_pipeline()).unwrap();
+        // Transactions are dispatched as (bytes, len + 1, 1).
+        let pipeline = unpack_pipeline(&p.get_packed_pipeline(), 3, 1).unwrap();
         assert!(pipeline.is_atomic());
         assert_eq!(pipeline.len(), 2, "MULTI/EXEC must be stripped");
+    }
+
+    #[test]
+    fn unpack_pipeline_literal_multi_exec_stays_plain() {
+        // A *non-atomic* pipeline containing literal MULTI/EXEC commands
+        // (manual transaction management) must not be misdetected as atomic:
+        // the decision comes from offset/count, not command sniffing.
+        let mut p = redis::Pipeline::new();
+        p.cmd("MULTI").cmd("INCR").arg("c").cmd("EXEC");
+        let pipeline = unpack_pipeline(&p.get_packed_pipeline(), 0, 3).unwrap();
+        assert!(!pipeline.is_atomic());
+        assert_eq!(pipeline.len(), 3, "MULTI/EXEC must be preserved");
+    }
+
+    #[test]
+    fn unpack_pipeline_transaction_without_wrapper_is_rejected() {
+        let mut p = redis::Pipeline::new();
+        p.cmd("INCR").arg("c");
+        // Transaction offsets with no MULTI…EXEC wrapper: malformed.
+        let err = unpack_pipeline(&p.get_packed_pipeline(), 2, 1).unwrap_err();
+        assert_eq!(err.kind(), redis::ErrorKind::ClientError);
+    }
+
+    #[test]
+    fn unpack_rejects_overflowing_bulk_length() {
+        // `len + 2` on usize::MAX wraps in release builds; previously this
+        // panicked on the slice range instead of returning an error.
+        let input = b"*1\r\n$18446744073709551615\r\nX";
+        let err = unpack_commands(input).unwrap_err();
+        assert_eq!(err.kind(), redis::ErrorKind::ClientError);
+    }
+
+    #[test]
+    fn unpack_rejects_malformed_input() {
+        // Length larger than usize: parse failure, not panic.
+        assert!(unpack_commands(b"*1\r\n$99999999999999999999\r\nX\r\n").is_err());
+        // Truncated bulk payloads.
+        assert!(unpack_commands(b"*1\r\n$5\r\nab").is_err());
+        assert!(unpack_commands(b"*1\r\n$5\r\nabcde").is_err()); // missing CRLF
+        // Bulk data not terminated by CRLF.
+        assert!(unpack_commands(b"*1\r\n$3\r\nabcXX").is_err());
+        // Wrong / missing type markers.
+        assert!(unpack_commands(b"$3\r\nfoo\r\n").is_err());
+        assert!(unpack_commands(b"*1\r\n+OK\r\n").is_err());
+        // Non-digit and non-strict lengths (RESP lengths are bare digits).
+        assert!(unpack_commands(b"*x\r\n").is_err());
+        assert!(unpack_commands(b"*1\r\n$+5\r\nhello\r\n").is_err());
+        assert!(unpack_commands(b"*1\r\n$\r\n\r\n").is_err());
+        // Missing CRLF after length.
+        assert!(unpack_commands(b"*1").is_err());
     }
 }
