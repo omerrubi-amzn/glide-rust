@@ -156,12 +156,21 @@ build, test, and benchmark.
 
 ## Migrating from redis-rs
 
-Both clients are **first-class redis-rs connection objects**: they implement
-`redis::aio::ConnectionLike` (and the sync clients implement the blocking
-`redis::ConnectionLike`), so the complete redis-rs typed API — `AsyncCommands`
-/ `Commands`, `Pipeline` (incl. atomic transactions), scan iterators, and
-`Script` — works on them with **exact redis-rs signatures and `RedisResult`
-errors**. Everything you need is re-exported from `glide`:
+The complete redis-rs typed API — `AsyncCommands` / `Commands`, `Pipeline`
+(incl. atomic transactions), scan iterators, and `Script` — works on both
+clients with **exact redis-rs signatures and `RedisResult` errors**.
+Everything you need is re-exported from `glide`.
+
+`glide::AsyncCommands` / `glide::Commands` are GLIDE-owned drop-in
+replacements for the fork's traits: identical method names, signatures, and
+wire encoding (they delegate to the fork's own `Cmd` constructors), but
+commands are handed to glide-core **by value**, so a typed compat call copies
+your payload exactly as many times as the native GLIDE API — this matters for
+large values. Both clients also implement `redis::aio::ConnectionLike`
+(sync clients: the blocking `redis::ConnectionLike`), so redis-rs `Pipeline`,
+scan iterators, generic code bounded on the literal fork traits
+(`glide::redis::AsyncCommands`), and raw `cmd().query_async()` all work
+unchanged.
 
 ```rust,no_run
 use glide::{AsyncCommands, GlideClient, GlideClientConfiguration, Script, pipe};

@@ -451,6 +451,26 @@ impl_sync_connection_like!(SyncGlideClient, |c: &SyncGlideClient| c.inner.db());
 // Cluster deployments always use database 0.
 impl_sync_connection_like!(SyncGlideClusterClient, |_c: &SyncGlideClusterClient| 0);
 
+// ---- owned-send compat traits (native copy behavior) --------------------------
+// See the async impls in `client.rs`: commands arrive **by value**, so the
+// blocking typed API costs no `Cmd` clone and no packed-byte round-trip.
+
+macro_rules! impl_sync_owned_send {
+    ($sync_ty:ty) => {
+        impl crate::compat_commands::Commands for $sync_ty {
+            fn glide_send_owned_sync(&mut self, cmd: redis::Cmd) -> redis::RedisResult<Value> {
+                runtime().block_on(crate::compat_commands::AsyncCommands::glide_send_owned(
+                    &mut self.inner,
+                    cmd,
+                ))
+            }
+        }
+    };
+}
+
+impl_sync_owned_send!(SyncGlideClient);
+impl_sync_owned_send!(SyncGlideClusterClient);
+
 #[cfg(test)]
 mod compat_tests {
     use super::*;

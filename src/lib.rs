@@ -6,6 +6,7 @@
 pub mod batch;
 pub mod client;
 pub mod commands;
+pub mod compat_commands;
 pub mod config;
 pub mod error;
 pub mod executor;
@@ -79,6 +80,17 @@ pub use redis::Value;
 // # Ok(()) }
 // ```
 
+/// The redis-rs typed command trait — GLIDE-owned drop-in with **native copy
+/// behavior** (commands sent by value, no per-call `Cmd` clone). Signature-
+/// identical to the fork's `redis::AsyncCommands`, which remains available at
+/// [`redis::AsyncCommands`](crate::redis::AsyncCommands) for code needing the
+/// literal fork trait.
+pub use compat_commands::AsyncCommands;
+/// The redis-rs **blocking** typed command trait — GLIDE-owned drop-in with
+/// native copy behavior (see [`AsyncCommands`]). The fork's trait remains at
+/// [`redis::Commands`](crate::redis::Commands).
+#[cfg(feature = "sync")]
+pub use compat_commands::Commands;
 /// The **whole vendored `redis` crate**, re-exported. Downstream crates cannot
 /// name the git-dep fork directly, and the curated flat re-exports above are
 /// deliberately incomplete where names collide with native GLIDE types
@@ -93,12 +105,6 @@ pub use redis::Value;
 /// **Semver note:** this makes the fork's API part of this crate's public
 /// surface — bumping the pinned fork rev is a breaking change (see PARITY.md).
 pub use redis;
-/// The redis-rs typed command trait, implemented by both GLIDE clients.
-pub use redis::AsyncCommands;
-/// The redis-rs **blocking** typed command trait, implemented by the sync
-/// clients ([`sync::SyncGlideClient`] / [`sync::SyncGlideClusterClient`]).
-#[cfg(feature = "sync")]
-pub use redis::Commands;
 /// redis-rs connection-description types, accepted by
 /// [`GlideClientConfiguration::from_connection_info`] and
 /// [`GlideClusterClientConfiguration::from_urls`].

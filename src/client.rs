@@ -639,3 +639,23 @@ impl redis::aio::ConnectionLike for GlideClusterClient {
         false
     }
 }
+
+// ---- owned-send compat traits (native copy behavior) --------------------------
+//
+// `crate::AsyncCommands` methods build the `Cmd` themselves and hand it here
+// **by value** — unlike the `ConnectionLike` path above, no `Cmd` clone is
+// needed, so a typed compat call copies the payload exactly as many times as
+// the native GLIDE API (build + glide-core's internal owned copy).
+
+impl crate::compat_commands::AsyncCommands for GlideClient {
+    fn glide_send_owned<'a>(&'a mut self, mut cmd: Cmd) -> redis::RedisFuture<'a, Value> {
+        Box::pin(async move { self.inner.send_command(&mut cmd, None).await })
+    }
+}
+
+impl crate::compat_commands::AsyncCommands for GlideClusterClient {
+    fn glide_send_owned<'a>(&'a mut self, mut cmd: Cmd) -> redis::RedisFuture<'a, Value> {
+        // Routing is decided by glide-core from the command's keys.
+        Box::pin(async move { self.inner.send_command(&mut cmd, None).await })
+    }
+}

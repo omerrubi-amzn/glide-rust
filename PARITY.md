@@ -207,6 +207,40 @@ provide naming shims (`get_message` alias) only.
 - Scan iterators run against the connected node — for cluster-wide iteration
   use our native `cluster_scan`.
 
+### Payload copy behavior (owned-send traits)
+
+`glide::AsyncCommands` / `glide::Commands` are **GLIDE-owned drop-in
+replacements** for the fork's traits (generated from the fork's own
+`implement_commands!` table — see `tools/gen_compat_commands.py`): identical
+names, generic order (turbofish-compatible), and wire encoding (methods
+delegate to the fork's `Cmd::<name>()` constructors), but the built `Cmd` is
+handed to glide-core **by value** via `glide_send_owned`, eliminating the
+`&Cmd → clone` tax of the `ConnectionLike` dispatch path.
+
+This is a deliberate softening of "hard" trait parity: the exported traits are
+not literally `redis::AsyncCommands`/`redis::Commands` (those remain
+implemented via `ConnectionLike` and reachable at `glide::redis::…` for
+generic code bounded on them). Call sites compile unchanged either way.
+
+Copies of an N-byte payload before wire serialization (glide-core internally
+clones every single command once — `client/mod.rs:1138` at the pinned rev; an
+upstream by-value `send_command` would remove that for all bindings):
+
+| Path | Copies |
+|---|---|
+| Native `Batch` / compat `Pipeline::query_async` | 1 |
+| Native typed methods (`StringCommands::set`, …) | 2 |
+| **Compat typed methods (`glide::AsyncCommands` / `Commands`)** | **2 (= native)** |
+| Fork traits via `ConnectionLike` (`glide::redis::AsyncCommands`) | 3 |
+| Sync compat `Pipeline::query` (packed-byte round-trip) | 3 |
+| `Script` invoke | 3 (interleaved key/arg buffers; redis-rs-inherent +1) |
+
+Measured (10MB SET, loopback, release): native 25.18 ms ≈ owned-send compat
+25.30 ms; fork `ConnectionLike` path 25.89 ms (+~0.7 ms = the extra copy).
+Read paths have zero extra copies everywhere. For large values prefer the
+typed traits or `Batch`; the escape hatch `glide_send_owned(cmd)` sends any
+custom command with zero extra copies.
+
 ### Semver implication of re-exporting the fork
 
 The crate re-exports the vendored `redis` fork wholesale (`glide::redis::…`,
