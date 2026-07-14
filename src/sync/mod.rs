@@ -296,9 +296,15 @@ fn unpack_commands(bytes: &[u8]) -> redis::RedisResult<Vec<redis::Cmd>> {
 
     let mut out = Vec::new();
     let mut rest = bytes;
+    // Reused scratch: arg slices of the command currently being parsed.
+    let mut args: Vec<&[u8]> = Vec::new();
     while !rest.is_empty() {
         let (argc, mut cur) = read_len(rest, b'*')?;
-        let mut cmd = redis::Cmd::new();
+        // Two passes per command: collect the arg slices first so the `Cmd`
+        // can be built pre-sized (`with_capacity`) — `cmd.arg()` into an
+        // empty `Cmd` would regrow its data/args buffers as it copies.
+        args.clear();
+        let mut data_len = 0usize;
         for _ in 0..argc {
             let (len, data_and_rest) = read_len(cur, b'$')?;
             // `len` is attacker-controlled; `len + 2` must not overflow
@@ -310,8 +316,14 @@ fn unpack_commands(bytes: &[u8]) -> redis::RedisResult<Vec<redis::Cmd>> {
             if data_and_rest.len() < total || &data_and_rest[len..total] != b"\r\n" {
                 return Err(malformed("truncated bulk string"));
             }
-            cmd.arg(&data_and_rest[..len]);
+            args.push(&data_and_rest[..len]);
+            // Cannot overflow: every counted byte was verified present above.
+            data_len += len;
             cur = &data_and_rest[total..];
+        }
+        let mut cmd = redis::Cmd::with_capacity(argc, data_len);
+        for arg in &args {
+            cmd.arg(*arg);
         }
         out.push(cmd);
         rest = cur;
