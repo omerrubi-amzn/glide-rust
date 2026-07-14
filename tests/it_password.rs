@@ -10,7 +10,7 @@
 mod common;
 
 use common::TestServer;
-use glide::{ConnectionManagementCommands, CustomCommand, StringCommands};
+use glide::{AsyncCommands, ConnectionManagementCommands, CustomCommand};
 
 const NEW_PASS: &str = "rotated-p4ss";
 
@@ -39,11 +39,9 @@ async fn update_password_immediate_auth_succeeds() {
         .expect("immediate re-auth with the correct password should succeed");
 
     // Commands still work after the rotation.
-    client.set("pw-k", "v").await.unwrap();
-    assert_eq!(
-        client.get("pw-k").await.unwrap().as_deref(),
-        Some(&b"v"[..])
-    );
+    let _: () = client.set("pw-k", "v").await.unwrap();
+    let got: Option<glide::Bytes> = client.get("pw-k").await.unwrap();
+    assert_eq!(got.as_deref(), Some(&b"v"[..]));
 
     // Clear auth so the server drops cleanly.
     client

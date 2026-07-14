@@ -6,8 +6,8 @@
 mod common;
 
 use glide::{
-    GlideClient, GlideClientConfiguration, GlideClusterClient, GlideClusterClientConfiguration,
-    ProtocolVersion, StringCommands,
+    AsyncCommands, GlideClient, GlideClientConfiguration, GlideClusterClient,
+    GlideClusterClientConfiguration, ProtocolVersion,
 };
 use std::time::Duration;
 
@@ -22,8 +22,9 @@ async fn standalone_lazy(protocol: ProtocolVersion) {
         .expect("lazy connect returns a client");
     // First command triggers the actual connection.
     let k = common::key("lazy");
-    c.set(&k, "v").await.unwrap();
-    assert_eq!(c.get(&k).await.unwrap().as_deref(), Some(&b"v"[..]));
+    let _: () = c.set(&k, "v").await.unwrap();
+    let got: Option<glide::Bytes> = c.get(&k).await.unwrap();
+    assert_eq!(got.as_deref(), Some(&b"v"[..]));
 }
 
 #[tokio::test]
@@ -49,7 +50,7 @@ async fn standalone_lazy_defers_connection_error() {
     match GlideClient::connect(cfg).await {
         Ok(c) => {
             // Deferred: construction succeeded; the command must fail.
-            let res = c.get(common::key("k")).await;
+            let res: glide::RedisResult<Option<String>> = c.get(common::key("k")).await;
             assert!(
                 res.is_err(),
                 "expected first command to fail against a dead server"
@@ -73,6 +74,7 @@ async fn cluster_lazy_connect() {
         .await
         .expect("lazy cluster connect");
     let k = common::key("lazy_cluster");
-    c.set(&k, "v").await.unwrap();
-    assert_eq!(c.get(&k).await.unwrap().as_deref(), Some(&b"v"[..]));
+    let _: () = c.set(&k, "v").await.unwrap();
+    let got: Option<glide::Bytes> = c.get(&k).await.unwrap();
+    assert_eq!(got.as_deref(), Some(&b"v"[..]));
 }

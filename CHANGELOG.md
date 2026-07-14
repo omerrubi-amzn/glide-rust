@@ -3,6 +3,31 @@
 All notable changes to this crate are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.2.0 (unreleased)
+
+**Breaking — unified command API.** One command surface instead of two:
+
+- `glide::AsyncCommands` / `glide::Commands` are now THE command API:
+  redis-rs-shaped (names, generic order, and wire encoding match the vendored
+  fork; existing redis-rs call sites compile unchanged), generated from the
+  fork's command table, sent **by value** on the native zero-extra-copy path.
+  Deliberate deviations: `&self` receivers; `RedisResult` errors.
+- The duplicated native core command traits (string/hash/list/set/sorted-set/
+  generic/bitmap/HyperLogLog) were **removed** where redis-rs covers the
+  command. GLIDE-only commands remain as extension traits with concrete
+  return types (streams, geo, `FT.*`, `JSON.*`, Pub/Sub, scripting/functions,
+  server & connection management, hash field-TTL, `LCS`, `SINTERCARD`,
+  `ZRANGESTORE`, `BITFIELD`, `SORT`, `DUMP`/`RESTORE`, `COPY`, …).
+- `Batch`/`BatchOptions` **removed**: use `glide::pipe()` +
+  `Pipeline::query_async` / `PipelineExt::query_glide`, or
+  `execute_pipeline(&Pipeline, raise_on_error, &PipelineOptions)` for GLIDE
+  execution controls (timeout, retry policy, cluster routing).
+- redis-rs migration ergonomics: `from_url`/`from_connection_info`/`from_urls`,
+  mutual TLS (`client_identity`), `Script` with `EVALSHA` caching, whole-crate
+  `glide::redis` re-export, `ConnectionLike` implemented on all clients.
+- No performance regression: typed calls ride the owned-send path (measured at
+  native copy count; see DESIGN.md).
+
 ## [Unreleased]
 
 ### Added — Python-parity feature gaps

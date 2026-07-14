@@ -15,7 +15,7 @@
 //! Output is human-readable plus machine-parseable `RESULT` lines:
 //!   `RESULT <op> tls=<mode> conc=<n> ops=<n> secs=<f> throughput_ops=<f> p50_us=<f> p99_us=<f> avg_us=<f>`
 
-use glide::{GlideClusterClient, GlideClusterClientConfiguration, StringCommands, TlsConfig};
+use glide::{AsyncCommands, GlideClusterClient, GlideClusterClientConfiguration, TlsConfig};
 use std::env;
 use std::sync::Arc;
 use std::time::Instant;
@@ -50,10 +50,12 @@ async fn measure(
                 let t0 = Instant::now();
                 match op.as_str() {
                     "SET" => {
-                        c.set(&key, "value-payload-0123456789").await.unwrap();
+                        c.set::<_, _, ()>(&key, "value-payload-0123456789")
+                            .await
+                            .unwrap();
                     }
                     "GET" => {
-                        let _ = c.get(&key).await.unwrap();
+                        let _: Option<String> = c.get(&key).await.unwrap();
                     }
                     _ => unreachable!(),
                 }

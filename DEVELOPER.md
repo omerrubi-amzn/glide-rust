@@ -64,7 +64,7 @@ src/
   value.rs        redis::Value -> typed Rust conversions (RESP2 + RESP3)
   executor.rs     CommandExecutor seam + custom_command
   client.rs       GlideClient / GlideClusterClient (async)
-  batch.rs        Batch / transaction
+  pipeline_options.rs  Pipeline execution options (execute_pipeline)
   sync/mod.rs     blocking clients over a shared runtime
   commands/       one module per command family (blanket-impl traits)
 tests/

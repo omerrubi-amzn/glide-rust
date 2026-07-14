@@ -8,7 +8,7 @@ mod common;
 use glide::client::{ClusterScanCursor, PubSubMessageKind};
 use glide::commands::pubsub::PubSubCommands;
 use glide::config::{PubSubChannelMode, PubSubSubscriptions};
-use glide::{GlideClient, GlideClientConfiguration, Route, StringCommands};
+use glide::{AsyncCommands, GlideClient, GlideClientConfiguration, Route};
 use redis::Cmd;
 use std::collections::HashSet;
 use std::time::Duration;
@@ -35,7 +35,9 @@ timed_tokio_test!(
             common::wait_for_numsub(&publisher, &channel, |n| n >= 1, Duration::from_secs(3)).await,
             "subscription was not registered server-side in time"
         );
-        let n = publisher.publish(&channel, "hello").await.unwrap();
+        let n = PubSubCommands::publish(&publisher, &channel, "hello")
+            .await
+            .unwrap();
         assert!(n >= 1, "expected at least one receiver, got {n}");
 
         let msg = tokio::time::timeout(Duration::from_secs(3), subscriber.get_pubsub_message())
@@ -64,7 +66,9 @@ timed_tokio_test!(
             common::wait_for_numpat(&publisher, |n| n >= 1, Duration::from_secs(3)).await,
             "pattern subscription was not registered server-side in time"
         );
-        publisher.publish("news.tech", "breaking").await.unwrap();
+        PubSubCommands::publish(&publisher, "news.tech", "breaking")
+            .await
+            .unwrap();
 
         let msg = tokio::time::timeout(Duration::from_secs(3), subscriber.get_pubsub_message())
             .await
@@ -121,7 +125,7 @@ timed_tokio_test!(
         let mut expected = HashSet::new();
         for i in 0..50 {
             let k = format!("{prefix}:{i}");
-            client.set(&k, "v").await.unwrap();
+            let _: () = client.set(&k, "v").await.unwrap();
             expected.insert(k.into_bytes());
         }
 
@@ -158,8 +162,8 @@ timed_tokio_test!(
         };
         let uniq = common::key("m");
         let matching = format!("{uniq}:match:1");
-        client.set(&matching, "v").await.unwrap();
-        client.set(format!("{uniq}:other:1"), "v").await.unwrap();
+        let _: () = client.set(&matching, "v").await.unwrap();
+        let _: () = client.set(format!("{uniq}:other:1"), "v").await.unwrap();
 
         let pattern = format!("{uniq}:match:*");
         let mut found = Vec::new();
@@ -220,7 +224,7 @@ timed_tokio_test!(
             .route_command(set, Route::slot_key(k.clone(), glide::SlotType::Primary))
             .await
             .unwrap();
-        let got = client.get(&k).await.unwrap();
+        let got: Option<glide::Bytes> = client.get(&k).await.unwrap();
         assert_eq!(got.as_deref(), Some(&b"v"[..]));
     }
 );

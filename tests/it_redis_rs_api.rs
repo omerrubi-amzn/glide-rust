@@ -16,7 +16,7 @@ use std::collections::{HashMap, HashSet};
 // ---- typed AsyncCommands methods (exact redis-rs signatures) ----------------
 
 matrix_test!(set_get_typed, c, {
-    let mut c = c;
+    let c = c;
     let k = common::key("rrs");
     c.set::<_, _, ()>(&k, 42).await.unwrap();
     let as_int: i64 = c.get(&k).await.unwrap();
@@ -26,13 +26,13 @@ matrix_test!(set_get_typed, c, {
 });
 
 matrix_test!(get_missing_option_none, c, {
-    let mut c = c;
+    let c = c;
     let v: Option<String> = c.get(common::key("rrs_missing")).await.unwrap();
     assert_eq!(v, None);
 });
 
 matrix_test!(incr_decr_typed, c, {
-    let mut c = c;
+    let c = c;
     let k = common::key("rrs_ctr");
     let v: i64 = c.incr(&k, 5).await.unwrap();
     assert_eq!(v, 5);
@@ -42,7 +42,7 @@ matrix_test!(incr_decr_typed, c, {
 
 matrix_test!(redis_rs_names_work, c, {
     // Methods whose redis-rs names differ from our native trait names.
-    let mut c = c;
+    let c = c;
     let k = common::key("rrs_names");
     c.set_ex::<_, _, ()>(&k, "v", 100).await.unwrap();
     let ttl: i64 = c.ttl(&k).await.unwrap();
@@ -57,7 +57,7 @@ matrix_test!(redis_rs_names_work, c, {
 
 matrix_test!(deprecated_commands_still_work, c, {
     // The fork keeps deprecated commands (HMSET, RPOPLPUSH); same-slot keys.
-    let mut c = c;
+    let c = c;
     let src = common::tkey("rrs_dep", "src");
     let dst = common::tkey("rrs_dep", "dst");
     c.rpush::<_, _, ()>(&src, &["a", "b"]).await.unwrap();
@@ -70,7 +70,7 @@ matrix_test!(deprecated_commands_still_work, c, {
 matrix_test!(hgetall_decodes_to_hashmap, c, {
     // glide-core normalizes HGETALL to a map on both RESP2 and RESP3;
     // redis-rs HashMap decoding must accept it.
-    let mut c = c;
+    let c = c;
     let k = common::key("rrs_hash");
     c.hset_multiple::<_, _, _, ()>(&k, &[("f1", "v1"), ("f2", "v2")])
         .await
@@ -82,7 +82,7 @@ matrix_test!(hgetall_decodes_to_hashmap, c, {
 });
 
 matrix_test!(bool_normalization_decodes, c, {
-    let mut c = c;
+    let c = c;
     let k = common::key("rrs_set");
     c.sadd::<_, _, ()>(&k, "member").await.unwrap();
     let yes: bool = c.sismember(&k, "member").await.unwrap();
@@ -94,7 +94,7 @@ matrix_test!(bool_normalization_decodes, c, {
 });
 
 matrix_test!(smembers_decodes_to_hashset, c, {
-    let mut c = c;
+    let c = c;
     let k = common::key("rrs_sm");
     c.sadd::<_, _, ()>(&k, &["a", "b", "c"]).await.unwrap();
     let members: HashSet<String> = c.smembers(&k).await.unwrap();
@@ -105,7 +105,7 @@ matrix_test!(smembers_decodes_to_hashset, c, {
 });
 
 matrix_test!(zset_double_normalization_decodes, c, {
-    let mut c = c;
+    let c = c;
     let k = common::key("rrs_z");
     let added: i64 = c
         .zadd_multiple(&k, &[(1.5, "one"), (2.5, "two")])
@@ -124,7 +124,7 @@ matrix_test!(zset_double_normalization_decodes, c, {
 });
 
 matrix_test!(zrange_withscores_decodes, c, {
-    let mut c = c;
+    let c = c;
     let k = common::key("rrs_zr");
     c.zadd_multiple::<_, _, _, ()>(&k, &[(1.0, "a"), (2.0, "b")])
         .await
@@ -169,7 +169,7 @@ matrix_test!(atomic_transaction_query_async, c, {
 // ---- error surface -----------------------------------------------------------
 
 matrix_test!(wrong_type_returns_redis_error, c, {
-    let mut c = c;
+    let c = c;
     let k = common::key("rrs_err");
     c.set::<_, _, ()>(&k, "text").await.unwrap();
     let res: RedisResult<Vec<String>> = c.lrange(&k, 0, -1).await;

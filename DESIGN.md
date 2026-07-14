@@ -35,27 +35,40 @@ what every other wrapper does.
 additionally accepts a `Route` on command variants (via dedicated
 `*_with_route` helpers and `custom_command` routing).
 
-## Command families
-Each family is an **extension trait** with a blanket impl:
+## Command surface
+
+The **unified command API** is redis-rs-shaped: `glide::AsyncCommands` (async)
+and `glide::Commands` (blocking) are **generated** from the vendored redis-rs
+fork's `implement_commands!` table (`src/compat_commands.rs`, built by
+`tools/gen_compat_commands.py`). Method names, generic parameter order, and
+wire encoding match redis-rs exactly (methods delegate to the fork's own
+`Cmd::<name>()` constructors), with two deliberate deviations: methods take
+`&self` (the clients are cheaply cloneable handles), and commands are handed
+to glide-core **by value** via the `glide_send_owned` required method — the
+native zero-extra-copy path.
+
 ```rust
-#[async_trait]
-pub trait StringCommands: CommandExecutor {
-    async fn get<K: ToRedisArgs + Send>(&self, key: K) -> Result<Option<Bytes>> { .. }
-    async fn set<K: ToRedisArgs + Send, V: ToRedisArgs + Send>(&self, k: K, v: V) -> Result<()> { .. }
+pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sync + Sized {
+    fn glide_send_owned<'a>(&'a self, cmd: Cmd) -> RedisFuture<'a, Value>;
+    // + 151 generated methods with exact redis-rs signatures:
+    fn get<'a, K: ToRedisArgs + Send + Sync + 'a, RV: FromRedisValue>(
+        &'a self, key: K) -> RedisFuture<'a, RV> { /* Cmd::get -> glide_send_owned */ }
     // ...
 }
-impl<T: CommandExecutor + ?Sized> StringCommands for T {}
 ```
-Benefits: the async client, and any future executor (e.g. a routed handle), gets
-every command for free; families live in isolated files (parallel-friendly).
+
+Commands **beyond** redis-rs's surface live in GLIDE **extension traits**
+(`src/commands/`): streams, geo, Search (`FT.*`), JSON, Pub/Sub, scripting/
+functions, server & connection management, plus per-family extras (hash
+field-TTL, `LCS`, `SINTERCARD`, `ZRANGESTORE`, `BITFIELD`, `SORT`,
+`DUMP`/`RESTORE`, …). These keep rich concrete return types and never collide
+with unified-trait names, so both can be imported together.
 
 - **Arguments**: generic over `redis::ToRedisArgs` — accepts `&str`, `String`,
-  `&[u8]`, `Vec<u8>`, integers, floats, slices, etc. Mirrors Python `TEncodable`.
-- **Returns**: typed via `redis::FromRedisValue` plus small hand conversions
-  (e.g. `Option<Bytes>`, `HashMap<String,Bytes>`, `f64`, bool-from-int).
-- **Options**: dedicated structs/enums (`SetOptions`, `ExpirySet`, `ExpireOptions`,
-  `ScoreBound`, ...) each with an `add_to(&self, &mut Cmd)` method. Mirrors the
-  Python option classes.
+  `&[u8]`, `Vec<u8>`, integers, floats, slices, etc.
+- **Returns**: unified traits are generic over `redis::FromRedisValue`
+  (`let v: Option<String> = c.get(k).await?`); extension traits return
+  concrete typed results.
 
 ## Value conversion
 `value` module provides helpers: `Value -> Option<Bytes>`, `-> String`, `-> i64`,
@@ -79,7 +92,10 @@ and RESP3 maps/doubles/booleans (glide-core already converts many types).
 shared multi-thread `tokio::runtime::Runtime` (lazily created, process-wide), and
 expose the same methods with `block_on`. Mirrors Python `glide-sync`.
 
-## Batch / Transaction
-`Batch::new(is_atomic)` collects `Cmd`s into a `redis::Pipeline`; the client
-executes via `send_transaction` (atomic) or `send_pipeline` (non-atomic) and maps
-the returned `Value::Array` into `Vec<Value>`.
+## Pipelines / Transactions
+redis-rs pipelines are used directly: build with `glide::pipe()` (add
+`.atomic()` for `MULTI`/`EXEC`), execute typed via `Pipeline::query_async`
+(sync: `PipelineExt::query_glide`), or via `execute_pipeline(&Pipeline,
+raise_on_error, &PipelineOptions)` when GLIDE execution controls (per-call
+timeout, pipeline retry policy, cluster routing) are needed. The client
+dispatches to glide-core's `send_transaction` (atomic) or `send_pipeline`.

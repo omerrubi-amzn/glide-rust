@@ -4,7 +4,7 @@
 mod common;
 
 use glide::commands::options::FlushMode;
-use glide::{ServerManagementCommands, StringCommands};
+use glide::{AsyncCommands, ServerManagementCommands};
 
 resp_test!(info_non_empty, c, {
     let info = c.info().await.unwrap();
@@ -26,18 +26,18 @@ resp_test!(info_sections, c, {
 resp_test!(dbsize, c, {
     // Fresh server: start empty, add keys, count grows.
     let before = c.dbsize().await.unwrap();
-    c.set(common::key("k"), "v").await.unwrap();
+    c.set::<_, _, ()>(common::key("k"), "v").await.unwrap();
     assert!(c.dbsize().await.unwrap() > before);
 });
 
 resp_test!(flushdb, c, {
-    c.set(common::key("k"), "v").await.unwrap();
+    c.set::<_, _, ()>(common::key("k"), "v").await.unwrap();
     c.flushdb(Some(FlushMode::Sync)).await.unwrap();
     assert_eq!(c.dbsize().await.unwrap(), 0);
 });
 
 resp_test!(flushall, c, {
-    c.set(common::key("k"), "v").await.unwrap();
+    c.set::<_, _, ()>(common::key("k"), "v").await.unwrap();
     c.flushall(None).await.unwrap();
     assert_eq!(c.dbsize().await.unwrap(), 0);
 });

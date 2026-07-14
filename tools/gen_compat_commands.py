@@ -138,7 +138,7 @@ def method(docs, attrs, name, generics, args, is_async):
     params = "".join(f", {a}: {t}" for a, t in args)
     if is_async:
         gens = "".join(f"{g}: {b} + Send + Sync + 'a, " for g, b in generics)
-        out.append(f"    fn {name}<'a, {gens}RV>(&'a mut self{params}) -> RedisFuture<'a, RV>")
+        out.append(f"    fn {name}<'a, {gens}RV>(&'a self{params}) -> RedisFuture<'a, RV>")
         out.append("    where")
         out.append("        RV: FromRedisValue,")
         out.append("    {")
@@ -147,7 +147,7 @@ def method(docs, attrs, name, generics, args, is_async):
         out.append("    }")
     else:
         gens = "".join(f"{g}: {b}, " for g, b in generics)
-        out.append(f"    fn {name}<'a, {gens}RV: FromRedisValue>(&mut self{params}) -> RedisResult<RV> {{")
+        out.append(f"    fn {name}<'a, {gens}RV: FromRedisValue>(&self{params}) -> RedisResult<RV> {{")
         out.append(f"        from_owned_redis_value(self.glide_send_owned_sync(Cmd::{name}({call_args}))?)")
         out.append("    }")
     return "\n".join(out)
@@ -186,27 +186,35 @@ use redis::{
     ToRedisArgs, Value, cmd, from_owned_redis_value,
 };
 
-/// The **async** redis-rs command surface with native copy behavior.
+/// The **unified async command API** of this crate, redis-rs-shaped.
 ///
-/// Drop-in for the fork's `redis::AsyncCommands`: same method names,
-/// signatures, and semantics; commands are sent by value (no per-call `Cmd`
-/// clone). Implemented by [`crate::GlideClient`] and
-/// [`crate::GlideClusterClient`].
-pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
+/// This is the primary command surface: method names, generic parameter
+/// order, and wire encoding match the vendored redis-rs fork's
+/// `AsyncCommands` (best-effort parity — redis-rs call sites compile
+/// unchanged), while commands are sent **by value** on the native
+/// zero-extra-copy path. One deliberate parity deviation: methods take
+/// `&self` (the clients are cheaply cloneable handles), which is strictly
+/// more permissive than redis-rs's `&mut self` — existing redis-rs call
+/// sites still compile via auto-borrow. Commands beyond redis-rs's surface
+/// (Search `FT.*`, `JSON.*`, streams, geo, …) live in the GLIDE extension
+/// traits under [`crate::commands`]. Implemented by [`crate::GlideClient`]
+/// and [`crate::GlideClusterClient`].
+pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sync + Sized {
     /// Send an already-built command **by value** (no clone). This is the
     /// single required method; every typed command delegates to it. Also
     /// useful directly as a zero-extra-copy escape hatch for custom commands
     /// with large payloads.
-    fn glide_send_owned<'a>(&'a mut self, cmd: Cmd) -> RedisFuture<'a, Value>;
+    fn glide_send_owned<'a>(&'a self, cmd: Cmd) -> RedisFuture<'a, Value>;
 
 '''
 
 sync_header = '''\
 }
 
-/// The **blocking** redis-rs command surface with native copy behavior.
+/// The **unified blocking command API** of this crate, redis-rs-shaped.
 ///
-/// Drop-in for the fork's `redis::Commands` — see [`AsyncCommands`].
+/// Blocking counterpart of [`AsyncCommands`] — see there for the design
+/// (redis-rs parity, `&self` receivers, native copy behavior).
 /// Implemented by [`crate::sync::SyncGlideClient`] and
 /// [`crate::sync::SyncGlideClusterClient`].
 ///
@@ -218,7 +226,7 @@ sync_header = '''\
 pub trait Commands: redis::ConnectionLike + Sized {
     /// Send an already-built command **by value** (no clone). This is the
     /// single required method; every typed command delegates to it.
-    fn glide_send_owned_sync(&mut self, cmd: Cmd) -> RedisResult<Value>;
+    fn glide_send_owned_sync(&self, cmd: Cmd) -> RedisResult<Value>;
 
 '''
 

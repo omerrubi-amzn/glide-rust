@@ -3,7 +3,7 @@
 
 mod common;
 
-use glide::{CustomCommand, Route, ScriptingCommands, StringCommands};
+use glide::{AsyncCommands, CustomCommand, Route, ScriptingCommands};
 
 resp_test!(eval_returns_argv, c, {
     let result = c
@@ -23,7 +23,7 @@ resp_test!(eval_integer, c, {
 
 resp_test!(eval_with_keys, c, {
     let k = common::key("k");
-    c.set(&k, "stored").await.unwrap();
+    c.set::<_, _, ()>(&k, "stored").await.unwrap();
     let result = c
         .eval::<&str, &str>("return redis.call('GET', KEYS[1])", &[k.as_str()], &[])
         .await

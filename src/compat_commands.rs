@@ -31,24 +31,31 @@ use redis::{
     ToRedisArgs, Value, cmd, from_owned_redis_value,
 };
 
-/// The **async** redis-rs command surface with native copy behavior.
+/// The **unified async command API** of this crate, redis-rs-shaped.
 ///
-/// Drop-in for the fork's `redis::AsyncCommands`: same method names,
-/// signatures, and semantics; commands are sent by value (no per-call `Cmd`
-/// clone). Implemented by [`crate::GlideClient`] and
-/// [`crate::GlideClusterClient`].
-pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
+/// This is the primary command surface: method names, generic parameter
+/// order, and wire encoding match the vendored redis-rs fork's
+/// `AsyncCommands` (best-effort parity — redis-rs call sites compile
+/// unchanged), while commands are sent **by value** on the native
+/// zero-extra-copy path. One deliberate parity deviation: methods take
+/// `&self` (the clients are cheaply cloneable handles), which is strictly
+/// more permissive than redis-rs's `&mut self` — existing redis-rs call
+/// sites still compile via auto-borrow. Commands beyond redis-rs's surface
+/// (Search `FT.*`, `JSON.*`, streams, geo, …) live in the GLIDE extension
+/// traits under [`crate::commands`]. Implemented by [`crate::GlideClient`]
+/// and [`crate::GlideClusterClient`].
+pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sync + Sized {
     /// Send an already-built command **by value** (no clone). This is the
     /// single required method; every typed command delegates to it. Also
     /// useful directly as a zero-extra-copy escape hatch for custom commands
     /// with large payloads.
-    fn glide_send_owned<'a>(&'a mut self, cmd: Cmd) -> RedisFuture<'a, Value>;
+    fn glide_send_owned<'a>(&'a self, cmd: Cmd) -> RedisFuture<'a, Value>;
 
     /// Get the value of a key.  If key is a vec this becomes an `MGET`.
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn get<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a mut self, key: K) -> RedisFuture<'a, RV>
+    fn get<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, key: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -60,7 +67,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn mget<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a mut self, key: K) -> RedisFuture<'a, RV>
+    fn mget<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, key: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -72,7 +79,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn keys<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a mut self, key: K) -> RedisFuture<'a, RV>
+    fn keys<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, key: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -85,7 +92,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn set<'a, K: ToRedisArgs + Send + Sync + 'a, V: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         value: V,
     ) -> RedisFuture<'a, RV>
@@ -101,7 +108,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn set_options<'a, K: ToRedisArgs + Send + Sync + 'a, V: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         value: V,
         options: SetOptions,
@@ -119,7 +126,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn set_multiple<'a, K: ToRedisArgs + Send + Sync + 'a, V: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         items: &'a [(K, V)],
     ) -> RedisFuture<'a, RV>
     where
@@ -134,7 +141,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn mset<'a, K: ToRedisArgs + Send + Sync + 'a, V: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         items: &'a [(K, V)],
     ) -> RedisFuture<'a, RV>
     where
@@ -149,7 +156,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn set_ex<'a, K: ToRedisArgs + Send + Sync + 'a, V: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         value: V,
         seconds: u64,
@@ -166,7 +173,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn pset_ex<'a, K: ToRedisArgs + Send + Sync + 'a, V: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         value: V,
         milliseconds: u64,
@@ -183,7 +190,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn set_nx<'a, K: ToRedisArgs + Send + Sync + 'a, V: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         value: V,
     ) -> RedisFuture<'a, RV>
@@ -199,7 +206,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn mset_nx<'a, K: ToRedisArgs + Send + Sync + 'a, V: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         items: &'a [(K, V)],
     ) -> RedisFuture<'a, RV>
     where
@@ -214,7 +221,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn getset<'a, K: ToRedisArgs + Send + Sync + 'a, V: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         value: V,
     ) -> RedisFuture<'a, RV>
@@ -230,7 +237,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn getrange<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         from: isize,
         to: isize,
@@ -247,7 +254,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn setrange<'a, K: ToRedisArgs + Send + Sync + 'a, V: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         offset: isize,
         value: V,
@@ -263,7 +270,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn del<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a mut self, key: K) -> RedisFuture<'a, RV>
+    fn del<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, key: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -275,10 +282,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn exists<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
-        key: K,
-    ) -> RedisFuture<'a, RV>
+    fn exists<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, key: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -290,10 +294,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn key_type<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
-        key: K,
-    ) -> RedisFuture<'a, RV>
+    fn key_type<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, key: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -306,7 +307,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn expire<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         seconds: i64,
     ) -> RedisFuture<'a, RV>
@@ -322,7 +323,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn expire_at<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         ts: i64,
     ) -> RedisFuture<'a, RV>
@@ -338,7 +339,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn pexpire<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         ms: i64,
     ) -> RedisFuture<'a, RV>
@@ -354,7 +355,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn pexpire_at<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         ts: i64,
     ) -> RedisFuture<'a, RV>
@@ -369,10 +370,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn persist<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
-        key: K,
-    ) -> RedisFuture<'a, RV>
+    fn persist<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, key: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -384,7 +382,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn ttl<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a mut self, key: K) -> RedisFuture<'a, RV>
+    fn ttl<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, key: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -396,7 +394,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn pttl<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a mut self, key: K) -> RedisFuture<'a, RV>
+    fn pttl<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, key: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -409,7 +407,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn get_ex<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         expire_at: Expiry,
     ) -> RedisFuture<'a, RV>
@@ -424,10 +422,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn get_del<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
-        key: K,
-    ) -> RedisFuture<'a, RV>
+    fn get_del<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, key: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -440,7 +435,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn rename<'a, K: ToRedisArgs + Send + Sync + 'a, N: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         new_key: N,
     ) -> RedisFuture<'a, RV>
@@ -456,7 +451,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn rename_nx<'a, K: ToRedisArgs + Send + Sync + 'a, N: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         new_key: N,
     ) -> RedisFuture<'a, RV>
@@ -471,10 +466,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn unlink<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
-        key: K,
-    ) -> RedisFuture<'a, RV>
+    fn unlink<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, key: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -487,7 +479,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn append<'a, K: ToRedisArgs + Send + Sync + 'a, V: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         value: V,
     ) -> RedisFuture<'a, RV>
@@ -504,7 +496,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn incr<'a, K: ToRedisArgs + Send + Sync + 'a, V: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         delta: V,
     ) -> RedisFuture<'a, RV>
@@ -520,7 +512,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn decr<'a, K: ToRedisArgs + Send + Sync + 'a, V: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         delta: V,
     ) -> RedisFuture<'a, RV>
@@ -536,7 +528,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn setbit<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         offset: usize,
         value: bool,
@@ -553,7 +545,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn getbit<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         offset: usize,
     ) -> RedisFuture<'a, RV>
@@ -568,10 +560,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn bitcount<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
-        key: K,
-    ) -> RedisFuture<'a, RV>
+    fn bitcount<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, key: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -584,7 +573,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn bitcount_range<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         start: usize,
         end: usize,
@@ -602,7 +591,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn bit_and<'a, D: ToRedisArgs + Send + Sync + 'a, S: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         dstkey: D,
         srckeys: S,
     ) -> RedisFuture<'a, RV>
@@ -619,7 +608,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn bit_or<'a, D: ToRedisArgs + Send + Sync + 'a, S: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         dstkey: D,
         srckeys: S,
     ) -> RedisFuture<'a, RV>
@@ -636,7 +625,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn bit_xor<'a, D: ToRedisArgs + Send + Sync + 'a, S: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         dstkey: D,
         srckeys: S,
     ) -> RedisFuture<'a, RV>
@@ -653,7 +642,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn bit_not<'a, D: ToRedisArgs + Send + Sync + 'a, S: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         dstkey: D,
         srckey: S,
     ) -> RedisFuture<'a, RV>
@@ -668,10 +657,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn strlen<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
-        key: K,
-    ) -> RedisFuture<'a, RV>
+    fn strlen<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, key: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -684,7 +670,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn hget<'a, K: ToRedisArgs + Send + Sync + 'a, F: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         field: F,
     ) -> RedisFuture<'a, RV>
@@ -700,7 +686,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn hdel<'a, K: ToRedisArgs + Send + Sync + 'a, F: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         field: F,
     ) -> RedisFuture<'a, RV>
@@ -722,7 +708,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         V: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         field: F,
         value: V,
@@ -745,7 +731,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         V: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         field: F,
         value: V,
@@ -768,7 +754,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         V: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         items: &'a [(F, V)],
     ) -> RedisFuture<'a, RV>
@@ -790,7 +776,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         D: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         field: F,
         delta: D,
@@ -807,7 +793,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn hexists<'a, K: ToRedisArgs + Send + Sync + 'a, F: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         field: F,
     ) -> RedisFuture<'a, RV>
@@ -822,7 +808,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn hkeys<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a mut self, key: K) -> RedisFuture<'a, RV>
+    fn hkeys<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, key: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -834,7 +820,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn hvals<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a mut self, key: K) -> RedisFuture<'a, RV>
+    fn hvals<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, key: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -846,10 +832,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn hgetall<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
-        key: K,
-    ) -> RedisFuture<'a, RV>
+    fn hgetall<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, key: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -861,7 +844,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn hlen<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a mut self, key: K) -> RedisFuture<'a, RV>
+    fn hlen<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, key: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -875,7 +858,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn blmove<'a, S: ToRedisArgs + Send + Sync + 'a, D: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         srckey: S,
         dstkey: D,
         src_dir: Direction,
@@ -895,7 +878,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn blmpop<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         timeout: f64,
         numkeys: usize,
         key: K,
@@ -914,7 +897,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn blpop<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         timeout: f64,
     ) -> RedisFuture<'a, RV>
@@ -930,7 +913,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn brpop<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         timeout: f64,
     ) -> RedisFuture<'a, RV>
@@ -947,7 +930,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn brpoplpush<'a, S: ToRedisArgs + Send + Sync + 'a, D: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         srckey: S,
         dstkey: D,
         timeout: f64,
@@ -964,7 +947,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn lindex<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         index: isize,
     ) -> RedisFuture<'a, RV>
@@ -986,7 +969,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         V: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         pivot: P,
         value: V,
@@ -1009,7 +992,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         V: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         pivot: P,
         value: V,
@@ -1025,7 +1008,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn llen<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a mut self, key: K) -> RedisFuture<'a, RV>
+    fn llen<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, key: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -1038,7 +1021,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn lmove<'a, S: ToRedisArgs + Send + Sync + 'a, D: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         srckey: S,
         dstkey: D,
         src_dir: Direction,
@@ -1057,7 +1040,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn lmpop<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         numkeys: usize,
         key: K,
         dir: Direction,
@@ -1077,7 +1060,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn lpop<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         count: Option<core::num::NonZeroUsize>,
     ) -> RedisFuture<'a, RV>
@@ -1093,7 +1076,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn lpos<'a, K: ToRedisArgs + Send + Sync + 'a, V: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         value: V,
         options: LposOptions,
@@ -1110,7 +1093,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn lpush<'a, K: ToRedisArgs + Send + Sync + 'a, V: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         value: V,
     ) -> RedisFuture<'a, RV>
@@ -1127,7 +1110,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn lpush_exists<'a, K: ToRedisArgs + Send + Sync + 'a, V: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         value: V,
     ) -> RedisFuture<'a, RV>
@@ -1143,7 +1126,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn lrange<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         start: isize,
         stop: isize,
@@ -1161,7 +1144,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn lrem<'a, K: ToRedisArgs + Send + Sync + 'a, V: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         count: isize,
         value: V,
@@ -1179,7 +1162,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn ltrim<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         start: isize,
         stop: isize,
@@ -1196,7 +1179,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn lset<'a, K: ToRedisArgs + Send + Sync + 'a, V: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         index: isize,
         value: V,
@@ -1215,7 +1198,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn rpop<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         count: Option<core::num::NonZeroUsize>,
     ) -> RedisFuture<'a, RV>
@@ -1231,7 +1214,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn rpoplpush<'a, K: ToRedisArgs + Send + Sync + 'a, D: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         dstkey: D,
     ) -> RedisFuture<'a, RV>
@@ -1247,7 +1230,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn rpush<'a, K: ToRedisArgs + Send + Sync + 'a, V: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         value: V,
     ) -> RedisFuture<'a, RV>
@@ -1264,7 +1247,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn rpush_exists<'a, K: ToRedisArgs + Send + Sync + 'a, V: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         value: V,
     ) -> RedisFuture<'a, RV>
@@ -1280,7 +1263,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn sadd<'a, K: ToRedisArgs + Send + Sync + 'a, M: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         member: M,
     ) -> RedisFuture<'a, RV>
@@ -1295,7 +1278,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn scard<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a mut self, key: K) -> RedisFuture<'a, RV>
+    fn scard<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, key: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -1307,10 +1290,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn sdiff<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
-        keys: K,
-    ) -> RedisFuture<'a, RV>
+    fn sdiff<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, keys: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -1323,7 +1303,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn sdiffstore<'a, D: ToRedisArgs + Send + Sync + 'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         dstkey: D,
         keys: K,
     ) -> RedisFuture<'a, RV>
@@ -1338,10 +1318,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn sinter<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
-        keys: K,
-    ) -> RedisFuture<'a, RV>
+    fn sinter<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, keys: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -1354,7 +1331,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn sinterstore<'a, D: ToRedisArgs + Send + Sync + 'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         dstkey: D,
         keys: K,
     ) -> RedisFuture<'a, RV>
@@ -1370,7 +1347,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn sismember<'a, K: ToRedisArgs + Send + Sync + 'a, M: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         member: M,
     ) -> RedisFuture<'a, RV>
@@ -1386,7 +1363,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn smismember<'a, K: ToRedisArgs + Send + Sync + 'a, M: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         members: M,
     ) -> RedisFuture<'a, RV>
@@ -1401,10 +1378,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn smembers<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
-        key: K,
-    ) -> RedisFuture<'a, RV>
+    fn smembers<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, key: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -1423,7 +1397,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         M: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         srckey: S,
         dstkey: D,
         member: M,
@@ -1439,7 +1413,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn spop<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a mut self, key: K) -> RedisFuture<'a, RV>
+    fn spop<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, key: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -1452,7 +1426,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn srandmember<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
     ) -> RedisFuture<'a, RV>
     where
@@ -1467,7 +1441,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn srandmember_multiple<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         count: usize,
     ) -> RedisFuture<'a, RV>
@@ -1483,7 +1457,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn srem<'a, K: ToRedisArgs + Send + Sync + 'a, M: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         member: M,
     ) -> RedisFuture<'a, RV>
@@ -1498,10 +1472,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn sunion<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
-        keys: K,
-    ) -> RedisFuture<'a, RV>
+    fn sunion<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, keys: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -1514,7 +1485,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn sunionstore<'a, D: ToRedisArgs + Send + Sync + 'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         dstkey: D,
         keys: K,
     ) -> RedisFuture<'a, RV>
@@ -1536,7 +1507,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         M: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         member: M,
         score: S,
@@ -1559,7 +1530,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         M: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         items: &'a [(S, M)],
     ) -> RedisFuture<'a, RV>
@@ -1574,7 +1545,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn zcard<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a mut self, key: K) -> RedisFuture<'a, RV>
+    fn zcard<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, key: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -1593,7 +1564,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         MM: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         min: M,
         max: MM,
@@ -1617,7 +1588,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         D: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         member: M,
         delta: D,
@@ -1635,7 +1606,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zinterstore<'a, D: ToRedisArgs + Send + Sync + 'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         dstkey: D,
         keys: &'a [K],
     ) -> RedisFuture<'a, RV>
@@ -1657,7 +1628,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         K: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         dstkey: D,
         keys: &'a [K],
     ) -> RedisFuture<'a, RV>
@@ -1679,7 +1650,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         K: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         dstkey: D,
         keys: &'a [K],
     ) -> RedisFuture<'a, RV>
@@ -1703,7 +1674,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         W: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         dstkey: D,
         keys: &'a [(K, W)],
     ) -> RedisFuture<'a, RV>
@@ -1727,7 +1698,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         W: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         dstkey: D,
         keys: &'a [(K, W)],
     ) -> RedisFuture<'a, RV>
@@ -1751,7 +1722,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         W: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         dstkey: D,
         keys: &'a [(K, W)],
     ) -> RedisFuture<'a, RV>
@@ -1773,7 +1744,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         MM: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         min: M,
         max: MM,
@@ -1791,7 +1762,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn bzpopmax<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         timeout: f64,
     ) -> RedisFuture<'a, RV>
@@ -1807,7 +1778,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zpopmax<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         count: isize,
     ) -> RedisFuture<'a, RV>
@@ -1824,7 +1795,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn bzpopmin<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         timeout: f64,
     ) -> RedisFuture<'a, RV>
@@ -1840,7 +1811,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zpopmin<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         count: isize,
     ) -> RedisFuture<'a, RV>
@@ -1858,7 +1829,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn bzmpop_max<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         timeout: f64,
         keys: &'a [K],
         count: isize,
@@ -1876,7 +1847,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zmpop_max<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         keys: &'a [K],
         count: isize,
     ) -> RedisFuture<'a, RV>
@@ -1894,7 +1865,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn bzmpop_min<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         timeout: f64,
         keys: &'a [K],
         count: isize,
@@ -1912,7 +1883,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zmpop_min<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         keys: &'a [K],
         count: isize,
     ) -> RedisFuture<'a, RV>
@@ -1928,7 +1899,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrandmember<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         count: Option<isize>,
     ) -> RedisFuture<'a, RV>
@@ -1944,7 +1915,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrandmember_withscores<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         count: isize,
     ) -> RedisFuture<'a, RV>
@@ -1960,7 +1931,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrange<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         start: isize,
         stop: isize,
@@ -1977,7 +1948,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrange_withscores<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         start: isize,
         stop: isize,
@@ -2000,7 +1971,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         MM: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         min: M,
         max: MM,
@@ -2024,7 +1995,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         MM: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         min: M,
         max: MM,
@@ -2049,7 +2020,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         M: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         max: MM,
         min: M,
@@ -2073,7 +2044,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         M: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         max: MM,
         min: M,
@@ -2098,7 +2069,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         MM: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         min: M,
         max: MM,
@@ -2121,7 +2092,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         MM: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         min: M,
         max: MM,
@@ -2144,7 +2115,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         MM: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         min: M,
         max: MM,
@@ -2169,7 +2140,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         MM: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         min: M,
         max: MM,
@@ -2188,7 +2159,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrank<'a, K: ToRedisArgs + Send + Sync + 'a, M: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         member: M,
     ) -> RedisFuture<'a, RV>
@@ -2204,7 +2175,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrem<'a, K: ToRedisArgs + Send + Sync + 'a, M: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         members: M,
     ) -> RedisFuture<'a, RV>
@@ -2226,7 +2197,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         MM: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         min: M,
         max: MM,
@@ -2243,7 +2214,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zremrangebyrank<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         start: isize,
         stop: isize,
@@ -2266,7 +2237,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         MM: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         min: M,
         max: MM,
@@ -2284,7 +2255,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrevrange<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         start: isize,
         stop: isize,
@@ -2302,7 +2273,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrevrange_withscores<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         start: isize,
         stop: isize,
@@ -2325,7 +2296,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         M: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         max: MM,
         min: M,
@@ -2348,7 +2319,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         M: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         max: MM,
         min: M,
@@ -2371,7 +2342,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         M: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         max: MM,
         min: M,
@@ -2396,7 +2367,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         M: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         max: MM,
         min: M,
@@ -2415,7 +2386,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrevrank<'a, K: ToRedisArgs + Send + Sync + 'a, M: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         member: M,
     ) -> RedisFuture<'a, RV>
@@ -2431,7 +2402,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zscore<'a, K: ToRedisArgs + Send + Sync + 'a, M: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         member: M,
     ) -> RedisFuture<'a, RV>
@@ -2452,7 +2423,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         M: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         key: K,
         members: &'a [M],
     ) -> RedisFuture<'a, RV>
@@ -2469,7 +2440,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zunionstore<'a, D: ToRedisArgs + Send + Sync + 'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         dstkey: D,
         keys: &'a [K],
     ) -> RedisFuture<'a, RV>
@@ -2491,7 +2462,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         K: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         dstkey: D,
         keys: &'a [K],
     ) -> RedisFuture<'a, RV>
@@ -2513,7 +2484,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         K: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         dstkey: D,
         keys: &'a [K],
     ) -> RedisFuture<'a, RV>
@@ -2537,7 +2508,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         W: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         dstkey: D,
         keys: &'a [(K, W)],
     ) -> RedisFuture<'a, RV>
@@ -2561,7 +2532,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         W: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         dstkey: D,
         keys: &'a [(K, W)],
     ) -> RedisFuture<'a, RV>
@@ -2585,7 +2556,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
         W: ToRedisArgs + Send + Sync + 'a,
         RV,
     >(
-        &'a mut self,
+        &'a self,
         dstkey: D,
         keys: &'a [(K, W)],
     ) -> RedisFuture<'a, RV>
@@ -2601,7 +2572,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn pfadd<'a, K: ToRedisArgs + Send + Sync + 'a, E: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
         element: E,
     ) -> RedisFuture<'a, RV>
@@ -2617,10 +2588,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn pfcount<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
-        key: K,
-    ) -> RedisFuture<'a, RV>
+    fn pfcount<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(&'a self, key: K) -> RedisFuture<'a, RV>
     where
         RV: FromRedisValue,
     {
@@ -2633,7 +2601,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn pfmerge<'a, D: ToRedisArgs + Send + Sync + 'a, S: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         dstkey: D,
         srckeys: S,
     ) -> RedisFuture<'a, RV>
@@ -2649,7 +2617,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn publish<'a, K: ToRedisArgs + Send + Sync + 'a, E: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         channel: K,
         message: E,
     ) -> RedisFuture<'a, RV>
@@ -2665,7 +2633,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn object_encoding<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
     ) -> RedisFuture<'a, RV>
     where
@@ -2680,7 +2648,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn object_idletime<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
     ) -> RedisFuture<'a, RV>
     where
@@ -2695,7 +2663,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn object_freq<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
     ) -> RedisFuture<'a, RV>
     where
@@ -2710,7 +2678,7 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn object_refcount<'a, K: ToRedisArgs + Send + Sync + 'a, RV>(
-        &'a mut self,
+        &'a self,
         key: K,
     ) -> RedisFuture<'a, RV>
     where
@@ -2811,9 +2779,10 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     }
 }
 
-/// The **blocking** redis-rs command surface with native copy behavior.
+/// The **unified blocking command API** of this crate, redis-rs-shaped.
 ///
-/// Drop-in for the fork's `redis::Commands` — see [`AsyncCommands`].
+/// Blocking counterpart of [`AsyncCommands`] — see there for the design
+/// (redis-rs parity, `&self` receivers, native copy behavior).
 /// Implemented by [`crate::sync::SyncGlideClient`] and
 /// [`crate::sync::SyncGlideClusterClient`].
 ///
@@ -2825,13 +2794,13 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
 pub trait Commands: redis::ConnectionLike + Sized {
     /// Send an already-built command **by value** (no clone). This is the
     /// single required method; every typed command delegates to it.
-    fn glide_send_owned_sync(&mut self, cmd: Cmd) -> RedisResult<Value>;
+    fn glide_send_owned_sync(&self, cmd: Cmd) -> RedisResult<Value>;
 
     /// Get the value of a key.  If key is a vec this becomes an `MGET`.
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn get<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn get<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::get(key))?)
     }
 
@@ -2839,7 +2808,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn mget<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn mget<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::mget(key))?)
     }
 
@@ -2847,7 +2816,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn keys<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn keys<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::keys(key))?)
     }
 
@@ -2856,7 +2825,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn set<'a, K: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         value: V,
     ) -> RedisResult<RV> {
@@ -2868,7 +2837,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn set_options<'a, K: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         value: V,
         options: SetOptions,
@@ -2882,7 +2851,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn set_multiple<'a, K: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         items: &'a [(K, V)],
     ) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::set_multiple(items))?)
@@ -2893,7 +2862,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn mset<'a, K: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         items: &'a [(K, V)],
     ) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::mset(items))?)
@@ -2904,7 +2873,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn set_ex<'a, K: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         value: V,
         seconds: u64,
@@ -2917,7 +2886,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn pset_ex<'a, K: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         value: V,
         milliseconds: u64,
@@ -2934,7 +2903,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn set_nx<'a, K: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         value: V,
     ) -> RedisResult<RV> {
@@ -2946,7 +2915,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn mset_nx<'a, K: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         items: &'a [(K, V)],
     ) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::mset_nx(items))?)
@@ -2957,7 +2926,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn getset<'a, K: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         value: V,
     ) -> RedisResult<RV> {
@@ -2969,7 +2938,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn getrange<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         from: isize,
         to: isize,
@@ -2982,7 +2951,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn setrange<'a, K: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         offset: isize,
         value: V,
@@ -2994,7 +2963,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn del<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn del<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::del(key))?)
     }
 
@@ -3002,7 +2971,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn exists<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn exists<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::exists(key))?)
     }
 
@@ -3010,7 +2979,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn key_type<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn key_type<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::key_type(key))?)
     }
 
@@ -3019,7 +2988,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn expire<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         seconds: i64,
     ) -> RedisResult<RV> {
@@ -3031,7 +3000,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn expire_at<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         ts: i64,
     ) -> RedisResult<RV> {
@@ -3042,11 +3011,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn pexpire<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
-        key: K,
-        ms: i64,
-    ) -> RedisResult<RV> {
+    fn pexpire<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K, ms: i64) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::pexpire(key, ms))?)
     }
 
@@ -3055,7 +3020,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn pexpire_at<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         ts: i64,
     ) -> RedisResult<RV> {
@@ -3066,7 +3031,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn persist<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn persist<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::persist(key))?)
     }
 
@@ -3074,7 +3039,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn ttl<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn ttl<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::ttl(key))?)
     }
 
@@ -3082,7 +3047,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn pttl<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn pttl<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::pttl(key))?)
     }
 
@@ -3091,7 +3056,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn get_ex<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         expire_at: Expiry,
     ) -> RedisResult<RV> {
@@ -3102,7 +3067,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn get_del<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn get_del<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::get_del(key))?)
     }
 
@@ -3111,7 +3076,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn rename<'a, K: ToRedisArgs, N: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         new_key: N,
     ) -> RedisResult<RV> {
@@ -3123,7 +3088,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn rename_nx<'a, K: ToRedisArgs, N: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         new_key: N,
     ) -> RedisResult<RV> {
@@ -3134,7 +3099,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn unlink<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn unlink<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::unlink(key))?)
     }
 
@@ -3143,7 +3108,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn append<'a, K: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         value: V,
     ) -> RedisResult<RV> {
@@ -3156,7 +3121,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn incr<'a, K: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         delta: V,
     ) -> RedisResult<RV> {
@@ -3168,7 +3133,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn decr<'a, K: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         delta: V,
     ) -> RedisResult<RV> {
@@ -3180,7 +3145,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn setbit<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         offset: usize,
         value: bool,
@@ -3193,7 +3158,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn getbit<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         offset: usize,
     ) -> RedisResult<RV> {
@@ -3204,7 +3169,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn bitcount<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn bitcount<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::bitcount(key))?)
     }
 
@@ -3213,7 +3178,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn bitcount_range<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         start: usize,
         end: usize,
@@ -3227,7 +3192,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn bit_and<'a, D: ToRedisArgs, S: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         dstkey: D,
         srckeys: S,
     ) -> RedisResult<RV> {
@@ -3240,7 +3205,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn bit_or<'a, D: ToRedisArgs, S: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         dstkey: D,
         srckeys: S,
     ) -> RedisResult<RV> {
@@ -3253,7 +3218,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn bit_xor<'a, D: ToRedisArgs, S: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         dstkey: D,
         srckeys: S,
     ) -> RedisResult<RV> {
@@ -3266,7 +3231,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn bit_not<'a, D: ToRedisArgs, S: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         dstkey: D,
         srckey: S,
     ) -> RedisResult<RV> {
@@ -3277,7 +3242,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn strlen<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn strlen<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::strlen(key))?)
     }
 
@@ -3286,7 +3251,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn hget<'a, K: ToRedisArgs, F: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         field: F,
     ) -> RedisResult<RV> {
@@ -3298,7 +3263,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn hdel<'a, K: ToRedisArgs, F: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         field: F,
     ) -> RedisResult<RV> {
@@ -3310,7 +3275,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn hset<'a, K: ToRedisArgs, F: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         field: F,
         value: V,
@@ -3323,7 +3288,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn hset_nx<'a, K: ToRedisArgs, F: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         field: F,
         value: V,
@@ -3336,7 +3301,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn hset_multiple<'a, K: ToRedisArgs, F: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         items: &'a [(F, V)],
     ) -> RedisResult<RV> {
@@ -3348,7 +3313,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn hincr<'a, K: ToRedisArgs, F: ToRedisArgs, D: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         field: F,
         delta: D,
@@ -3361,7 +3326,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn hexists<'a, K: ToRedisArgs, F: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         field: F,
     ) -> RedisResult<RV> {
@@ -3372,7 +3337,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn hkeys<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn hkeys<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::hkeys(key))?)
     }
 
@@ -3380,7 +3345,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn hvals<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn hvals<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::hvals(key))?)
     }
 
@@ -3388,7 +3353,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn hgetall<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn hgetall<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::hgetall(key))?)
     }
 
@@ -3396,7 +3361,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn hlen<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn hlen<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::hlen(key))?)
     }
 
@@ -3406,7 +3371,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn blmove<'a, S: ToRedisArgs, D: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         srckey: S,
         dstkey: D,
         src_dir: Direction,
@@ -3424,7 +3389,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn blmpop<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         timeout: f64,
         numkeys: usize,
         key: K,
@@ -3441,7 +3406,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn blpop<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         timeout: f64,
     ) -> RedisResult<RV> {
@@ -3453,7 +3418,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn brpop<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         timeout: f64,
     ) -> RedisResult<RV> {
@@ -3466,7 +3431,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn brpoplpush<'a, S: ToRedisArgs, D: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         srckey: S,
         dstkey: D,
         timeout: f64,
@@ -3481,7 +3446,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn lindex<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         index: isize,
     ) -> RedisResult<RV> {
@@ -3493,7 +3458,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn linsert_before<'a, K: ToRedisArgs, P: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         pivot: P,
         value: V,
@@ -3506,7 +3471,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn linsert_after<'a, K: ToRedisArgs, P: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         pivot: P,
         value: V,
@@ -3518,7 +3483,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn llen<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn llen<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::llen(key))?)
     }
 
@@ -3527,7 +3492,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn lmove<'a, S: ToRedisArgs, D: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         srckey: S,
         dstkey: D,
         src_dir: Direction,
@@ -3544,7 +3509,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn lmpop<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         numkeys: usize,
         key: K,
         dir: Direction,
@@ -3560,7 +3525,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn lpop<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         count: Option<core::num::NonZeroUsize>,
     ) -> RedisResult<RV> {
@@ -3572,7 +3537,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn lpos<'a, K: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         value: V,
         options: LposOptions,
@@ -3585,7 +3550,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn lpush<'a, K: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         value: V,
     ) -> RedisResult<RV> {
@@ -3598,7 +3563,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn lpush_exists<'a, K: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         value: V,
     ) -> RedisResult<RV> {
@@ -3610,7 +3575,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn lrange<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         start: isize,
         stop: isize,
@@ -3624,7 +3589,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn lrem<'a, K: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         count: isize,
         value: V,
@@ -3638,7 +3603,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn ltrim<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         start: isize,
         stop: isize,
@@ -3651,7 +3616,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn lset<'a, K: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         index: isize,
         value: V,
@@ -3666,7 +3631,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn rpop<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         count: Option<core::num::NonZeroUsize>,
     ) -> RedisResult<RV> {
@@ -3678,7 +3643,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn rpoplpush<'a, K: ToRedisArgs, D: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         dstkey: D,
     ) -> RedisResult<RV> {
@@ -3690,7 +3655,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn rpush<'a, K: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         value: V,
     ) -> RedisResult<RV> {
@@ -3703,7 +3668,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn rpush_exists<'a, K: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         value: V,
     ) -> RedisResult<RV> {
@@ -3715,7 +3680,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn sadd<'a, K: ToRedisArgs, M: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         member: M,
     ) -> RedisResult<RV> {
@@ -3726,7 +3691,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn scard<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn scard<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::scard(key))?)
     }
 
@@ -3734,7 +3699,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn sdiff<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, keys: K) -> RedisResult<RV> {
+    fn sdiff<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, keys: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::sdiff(keys))?)
     }
 
@@ -3743,7 +3708,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn sdiffstore<'a, D: ToRedisArgs, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         dstkey: D,
         keys: K,
     ) -> RedisResult<RV> {
@@ -3754,7 +3719,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn sinter<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, keys: K) -> RedisResult<RV> {
+    fn sinter<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, keys: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::sinter(keys))?)
     }
 
@@ -3763,7 +3728,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn sinterstore<'a, D: ToRedisArgs, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         dstkey: D,
         keys: K,
     ) -> RedisResult<RV> {
@@ -3775,7 +3740,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn sismember<'a, K: ToRedisArgs, M: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         member: M,
     ) -> RedisResult<RV> {
@@ -3787,7 +3752,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn smismember<'a, K: ToRedisArgs, M: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         members: M,
     ) -> RedisResult<RV> {
@@ -3798,7 +3763,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn smembers<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn smembers<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::smembers(key))?)
     }
 
@@ -3807,7 +3772,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn smove<'a, S: ToRedisArgs, D: ToRedisArgs, M: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         srckey: S,
         dstkey: D,
         member: M,
@@ -3819,7 +3784,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn spop<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn spop<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::spop(key))?)
     }
 
@@ -3827,7 +3792,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn srandmember<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn srandmember<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::srandmember(key))?)
     }
 
@@ -3836,7 +3801,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn srandmember_multiple<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         count: usize,
     ) -> RedisResult<RV> {
@@ -3848,7 +3813,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn srem<'a, K: ToRedisArgs, M: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         member: M,
     ) -> RedisResult<RV> {
@@ -3859,7 +3824,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn sunion<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, keys: K) -> RedisResult<RV> {
+    fn sunion<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, keys: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::sunion(keys))?)
     }
 
@@ -3868,7 +3833,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn sunionstore<'a, D: ToRedisArgs, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         dstkey: D,
         keys: K,
     ) -> RedisResult<RV> {
@@ -3880,7 +3845,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zadd<'a, K: ToRedisArgs, S: ToRedisArgs, M: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         member: M,
         score: S,
@@ -3893,7 +3858,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zadd_multiple<'a, K: ToRedisArgs, S: ToRedisArgs, M: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         items: &'a [(S, M)],
     ) -> RedisResult<RV> {
@@ -3904,7 +3869,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn zcard<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn zcard<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::zcard(key))?)
     }
 
@@ -3913,7 +3878,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zcount<'a, K: ToRedisArgs, M: ToRedisArgs, MM: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         min: M,
         max: MM,
@@ -3927,7 +3892,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zincr<'a, K: ToRedisArgs, M: ToRedisArgs, D: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         member: M,
         delta: D,
@@ -3941,7 +3906,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zinterstore<'a, D: ToRedisArgs, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         dstkey: D,
         keys: &'a [K],
     ) -> RedisResult<RV> {
@@ -3954,7 +3919,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zinterstore_min<'a, D: ToRedisArgs, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         dstkey: D,
         keys: &'a [K],
     ) -> RedisResult<RV> {
@@ -3967,7 +3932,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zinterstore_max<'a, D: ToRedisArgs, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         dstkey: D,
         keys: &'a [K],
     ) -> RedisResult<RV> {
@@ -3987,7 +3952,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
         W: ToRedisArgs,
         RV: FromRedisValue,
     >(
-        &mut self,
+        &self,
         dstkey: D,
         keys: &'a [(K, W)],
     ) -> RedisResult<RV> {
@@ -4007,7 +3972,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
         W: ToRedisArgs,
         RV: FromRedisValue,
     >(
-        &mut self,
+        &self,
         dstkey: D,
         keys: &'a [(K, W)],
     ) -> RedisResult<RV> {
@@ -4029,7 +3994,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
         W: ToRedisArgs,
         RV: FromRedisValue,
     >(
-        &mut self,
+        &self,
         dstkey: D,
         keys: &'a [(K, W)],
     ) -> RedisResult<RV> {
@@ -4043,7 +4008,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zlexcount<'a, K: ToRedisArgs, M: ToRedisArgs, MM: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         min: M,
         max: MM,
@@ -4057,7 +4022,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn bzpopmax<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         timeout: f64,
     ) -> RedisResult<RV> {
@@ -4069,7 +4034,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zpopmax<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         count: isize,
     ) -> RedisResult<RV> {
@@ -4082,7 +4047,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn bzpopmin<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         timeout: f64,
     ) -> RedisResult<RV> {
@@ -4094,7 +4059,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zpopmin<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         count: isize,
     ) -> RedisResult<RV> {
@@ -4108,7 +4073,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn bzmpop_max<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         timeout: f64,
         keys: &'a [K],
         count: isize,
@@ -4122,7 +4087,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zmpop_max<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         keys: &'a [K],
         count: isize,
     ) -> RedisResult<RV> {
@@ -4136,7 +4101,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn bzmpop_min<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         timeout: f64,
         keys: &'a [K],
         count: isize,
@@ -4150,7 +4115,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zmpop_min<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         keys: &'a [K],
         count: isize,
     ) -> RedisResult<RV> {
@@ -4162,7 +4127,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrandmember<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         count: Option<isize>,
     ) -> RedisResult<RV> {
@@ -4174,7 +4139,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrandmember_withscores<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         count: isize,
     ) -> RedisResult<RV> {
@@ -4186,7 +4151,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrange<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         start: isize,
         stop: isize,
@@ -4199,7 +4164,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrange_withscores<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         start: isize,
         stop: isize,
@@ -4214,7 +4179,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrangebylex<'a, K: ToRedisArgs, M: ToRedisArgs, MM: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         min: M,
         max: MM,
@@ -4234,7 +4199,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
         MM: ToRedisArgs,
         RV: FromRedisValue,
     >(
-        &mut self,
+        &self,
         key: K,
         min: M,
         max: MM,
@@ -4251,7 +4216,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrevrangebylex<'a, K: ToRedisArgs, MM: ToRedisArgs, M: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         max: MM,
         min: M,
@@ -4271,7 +4236,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
         M: ToRedisArgs,
         RV: FromRedisValue,
     >(
-        &mut self,
+        &self,
         key: K,
         max: MM,
         min: M,
@@ -4288,7 +4253,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrangebyscore<'a, K: ToRedisArgs, M: ToRedisArgs, MM: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         min: M,
         max: MM,
@@ -4307,7 +4272,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
         MM: ToRedisArgs,
         RV: FromRedisValue,
     >(
-        &mut self,
+        &self,
         key: K,
         min: M,
         max: MM,
@@ -4328,7 +4293,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
         MM: ToRedisArgs,
         RV: FromRedisValue,
     >(
-        &mut self,
+        &self,
         key: K,
         min: M,
         max: MM,
@@ -4351,7 +4316,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
         MM: ToRedisArgs,
         RV: FromRedisValue,
     >(
-        &mut self,
+        &self,
         key: K,
         min: M,
         max: MM,
@@ -4370,7 +4335,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrank<'a, K: ToRedisArgs, M: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         member: M,
     ) -> RedisResult<RV> {
@@ -4382,7 +4347,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrem<'a, K: ToRedisArgs, M: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         members: M,
     ) -> RedisResult<RV> {
@@ -4394,7 +4359,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrembylex<'a, K: ToRedisArgs, M: ToRedisArgs, MM: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         min: M,
         max: MM,
@@ -4407,7 +4372,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zremrangebyrank<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         start: isize,
         stop: isize,
@@ -4420,7 +4385,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrembyscore<'a, K: ToRedisArgs, M: ToRedisArgs, MM: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         min: M,
         max: MM,
@@ -4434,7 +4399,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrevrange<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         start: isize,
         stop: isize,
@@ -4448,7 +4413,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrevrange_withscores<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         start: isize,
         stop: isize,
@@ -4463,7 +4428,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrevrangebyscore<'a, K: ToRedisArgs, MM: ToRedisArgs, M: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         max: MM,
         min: M,
@@ -4482,7 +4447,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
         M: ToRedisArgs,
         RV: FromRedisValue,
     >(
-        &mut self,
+        &self,
         key: K,
         max: MM,
         min: M,
@@ -4503,7 +4468,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
         M: ToRedisArgs,
         RV: FromRedisValue,
     >(
-        &mut self,
+        &self,
         key: K,
         max: MM,
         min: M,
@@ -4526,7 +4491,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
         M: ToRedisArgs,
         RV: FromRedisValue,
     >(
-        &mut self,
+        &self,
         key: K,
         max: MM,
         min: M,
@@ -4543,7 +4508,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zrevrank<'a, K: ToRedisArgs, M: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         member: M,
     ) -> RedisResult<RV> {
@@ -4555,7 +4520,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zscore<'a, K: ToRedisArgs, M: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         member: M,
     ) -> RedisResult<RV> {
@@ -4567,7 +4532,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zscore_multiple<'a, K: ToRedisArgs, M: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         members: &'a [M],
     ) -> RedisResult<RV> {
@@ -4580,7 +4545,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zunionstore<'a, D: ToRedisArgs, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         dstkey: D,
         keys: &'a [K],
     ) -> RedisResult<RV> {
@@ -4593,7 +4558,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zunionstore_min<'a, D: ToRedisArgs, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         dstkey: D,
         keys: &'a [K],
     ) -> RedisResult<RV> {
@@ -4606,7 +4571,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn zunionstore_max<'a, D: ToRedisArgs, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         dstkey: D,
         keys: &'a [K],
     ) -> RedisResult<RV> {
@@ -4626,7 +4591,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
         W: ToRedisArgs,
         RV: FromRedisValue,
     >(
-        &mut self,
+        &self,
         dstkey: D,
         keys: &'a [(K, W)],
     ) -> RedisResult<RV> {
@@ -4646,7 +4611,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
         W: ToRedisArgs,
         RV: FromRedisValue,
     >(
-        &mut self,
+        &self,
         dstkey: D,
         keys: &'a [(K, W)],
     ) -> RedisResult<RV> {
@@ -4668,7 +4633,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
         W: ToRedisArgs,
         RV: FromRedisValue,
     >(
-        &mut self,
+        &self,
         dstkey: D,
         keys: &'a [(K, W)],
     ) -> RedisResult<RV> {
@@ -4682,7 +4647,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn pfadd<'a, K: ToRedisArgs, E: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         key: K,
         element: E,
     ) -> RedisResult<RV> {
@@ -4694,7 +4659,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn pfcount<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn pfcount<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::pfcount(key))?)
     }
 
@@ -4703,7 +4668,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn pfmerge<'a, D: ToRedisArgs, S: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         dstkey: D,
         srckeys: S,
     ) -> RedisResult<RV> {
@@ -4715,7 +4680,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn publish<'a, K: ToRedisArgs, E: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
+        &self,
         channel: K,
         message: E,
     ) -> RedisResult<RV> {
@@ -4726,10 +4691,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn object_encoding<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
-        key: K,
-    ) -> RedisResult<RV> {
+    fn object_encoding<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::object_encoding(key))?)
     }
 
@@ -4737,10 +4699,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn object_idletime<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
-        key: K,
-    ) -> RedisResult<RV> {
+    fn object_idletime<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::object_idletime(key))?)
     }
 
@@ -4748,7 +4707,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn object_freq<'a, K: ToRedisArgs, RV: FromRedisValue>(&mut self, key: K) -> RedisResult<RV> {
+    fn object_freq<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::object_freq(key))?)
     }
 
@@ -4756,10 +4715,7 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[inline]
     #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
-    fn object_refcount<'a, K: ToRedisArgs, RV: FromRedisValue>(
-        &mut self,
-        key: K,
-    ) -> RedisResult<RV> {
+    fn object_refcount<'a, K: ToRedisArgs, RV: FromRedisValue>(&self, key: K) -> RedisResult<RV> {
         from_owned_redis_value(self.glide_send_owned_sync(Cmd::object_refcount(key))?)
     }
 

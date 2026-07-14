@@ -3,13 +3,13 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-pub mod batch;
 pub mod client;
 pub mod commands;
 pub mod compat_commands;
 pub mod config;
 pub mod error;
 pub mod executor;
+pub mod pipeline_options;
 pub mod routes;
 pub mod script;
 pub mod telemetry;
@@ -23,12 +23,12 @@ mod command_mock;
 
 // ---- Primary public API re-exports (mirror Python's top-level `glide` package) ----
 
-pub use batch::{Batch, BatchOptions};
 pub use client::{
     ClusterScanCursor, GlideClient, GlideClusterClient, PubSubMessage, PubSubMessageKind,
 };
 pub use error::{GlideError, Result};
 pub use executor::{CommandExecutor, CustomCommand};
+pub use pipeline_options::PipelineOptions;
 pub use routes::{Route, SlotType};
 
 pub use config::{
@@ -43,16 +43,15 @@ pub use commands::prelude::*;
 /// All shared option types.
 pub use commands::options::{
     ClientPauseMode, ConditionalChange, ExpireOptions, ExpirySet, FlushMode, FunctionRestorePolicy,
-    HashFieldConditionalChange, InsertPosition, Limit, ListDirection, MigrateOptions, ObjectType,
-    OrderBy, RestoreOptions, SetOptions, UpdateOptions,
+    HashFieldConditionalChange, Limit, MigrateOptions, ObjectType, OrderBy, RestoreOptions,
 };
 
 /// Family-specific option/type re-exports.
 pub use commands::bitmap::{
-    BitEncoding, BitFieldOffset, BitFieldSubcommand, BitOverflow, BitmapIndexType, BitwiseOperation,
+    BitEncoding, BitFieldOffset, BitFieldSubcommand, BitOverflow, BitmapIndexType,
 };
 pub use commands::geo::{GeoSearchShape, GeoUnit, GeospatialData};
-pub use commands::sorted_set::{AggregationType, LexBound, ScoreBound, ScoreFilter, ZAddOptions};
+pub use commands::sorted_set::{AggregationType, LexBound, ScoreBound};
 pub use commands::stream::{
     PendingConsumer, StreamAddOptions, StreamClaimOptions, StreamEntry, StreamGroupCreateOptions,
     StreamReadGroupOptions, StreamReadOptions, StreamTrimOptions, StreamTrimStrategy,

@@ -24,8 +24,9 @@ GLIDE binding.
 - **`custom_command` escape hatch** — run *any* command (with optional cluster
   routing) even where a typed wrapper is not provided, guaranteeing 100%
   functional coverage.
-- **Batching** — pipelines and `MULTI`/`EXEC` transactions with configurable
-  [`BatchOptions`] (per-batch timeout and pipeline retry strategy).
+- **Batching** — redis-rs `pipe()` pipelines and `MULTI`/`EXEC` transactions,
+  with GLIDE execution controls (`PipelineOptions`: per-call timeout and
+  pipeline retry strategy) via `execute_pipeline`.
 - **Dynamic authentication** — rotate the connection password at runtime with
   `update_connection_password`, or use **AWS IAM** auth (ElastiCache / MemoryDB)
   via `ServerCredentials::iam`.
@@ -104,17 +105,16 @@ coverage, and benchmarks).
 ## Quick start (async)
 
 ```rust,no_run
-use glide::{GlideClient, GlideClientConfiguration};
-use glide::StringCommands; // brings command methods into scope
+use glide::{AsyncCommands, GlideClient, GlideClientConfiguration};
 
 #[tokio::main]
-async fn main() -> glide::Result<()> {
+async fn main() -> glide::RedisResult<()> {
     let config = GlideClientConfiguration::with_address("localhost", 6379);
-    let client = GlideClient::connect(config).await?;
+    let client = GlideClient::connect(config).await.expect("connect");
 
-    client.set("hello", "world").await?;
-    let value = client.get("hello").await?;
-    assert_eq!(value.as_deref(), Some(&b"world"[..]));
+    client.set::<_, _, ()>("hello", "world").await?;
+    let value: Option<String> = client.get("hello").await?;
+    assert_eq!(value.as_deref(), Some("world"));
     Ok(())
 }
 ```
@@ -123,15 +123,15 @@ async fn main() -> glide::Result<()> {
 
 ```rust,no_run
 use glide::sync::SyncGlideClient;
-use glide::{GlideClientConfiguration, StringCommands};
+use glide::{Commands, GlideClientConfiguration};
 
-fn main() -> glide::Result<()> {
+fn main() -> glide::RedisResult<()> {
     let client = SyncGlideClient::connect(
         GlideClientConfiguration::with_address("localhost", 6379),
-    )?;
-    client.set("hello", "world")?;
-    let value = client.get("hello")?;
-    assert_eq!(value.as_deref(), Some(&b"world"[..]));
+    ).expect("connect");
+    client.set::<_, _, ()>("hello", "world")?;
+    let value: Option<String> = client.get("hello")?;
+    assert_eq!(value.as_deref(), Some("world"));
     Ok(())
 }
 ```
@@ -200,15 +200,16 @@ let n: i64 = script.arg(41).invoke_async(&mut client).await?;
 ```
 
 Notes:
-- Import **either** the redis-rs traits (`glide::AsyncCommands`) **or** the
-  native GLIDE traits (`glide::StringCommands`, …) in a given scope — they
-  share method names, so importing both requires fully-qualified calls.
+- `glide::AsyncCommands` / `glide::Commands` are the unified command API
+  (redis-rs-shaped). GLIDE extension traits (streams, geo, Search `FT.*`,
+  `JSON.*`, hash field-TTL, …) cover commands beyond redis-rs's surface;
+  their names never collide with the unified traits, so import both freely.
 - Cluster: `GlideClusterClientConfiguration::from_urls([...])` accepts
   redis-rs seed-node URLs; commands are routed automatically.
 - Mutual TLS: `config.client_identity(cert_pem, key_pem)`.
 - Large sync pipelines: `redis::Pipeline::query` on a blocking client incurs a
   packed-byte round-trip (extra payload copies). For copy-optimal blocking
-  pipelines use `sync::PipelineExt::query_glide(&client)` (or native `Batch`).
+  pipelines use `sync::PipelineExt::query_glide(&client)`.
 - Accepted gaps: no Sentinel / unix sockets / async-std (unsupported by
   glide-core); Pub/Sub stays client-integrated by design.
 

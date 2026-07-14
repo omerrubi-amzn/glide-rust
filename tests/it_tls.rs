@@ -8,7 +8,7 @@
 
 mod common;
 
-use glide::{ConnectionManagementCommands, GlideClientConfiguration, StringCommands, TlsConfig};
+use glide::{AsyncCommands, ConnectionManagementCommands, GlideClientConfiguration, TlsConfig};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -135,11 +135,9 @@ async fn tls_insecure_roundtrip() {
         }
     };
     assert_eq!(client.ping().await.unwrap(), "PONG");
-    client.set("tlsk", "tlsv").await.unwrap();
-    assert_eq!(
-        client.get("tlsk").await.unwrap().as_deref(),
-        Some(&b"tlsv"[..])
-    );
+    let _: () = client.set("tlsk", "tlsv").await.unwrap();
+    let got: Option<glide::Bytes> = client.get("tlsk").await.unwrap();
+    assert_eq!(got.as_deref(), Some(&b"tlsv"[..]));
 }
 
 use glide::GlideClient;

@@ -8,15 +8,13 @@
 //! (and the cluster equivalent), and the most common commands also have direct
 //! blocking methods.
 
-use crate::batch::{Batch, BatchOptions};
 use crate::client::{GlideClient, GlideClusterClient};
-use crate::commands::options::SetOptions;
 use crate::commands::prelude::*;
 use crate::config::{GlideClientConfiguration, GlideClusterClientConfiguration};
 use crate::error::Result;
 use crate::executor::CustomCommand;
+use crate::pipeline_options::PipelineOptions;
 use crate::routes::Route;
-use bytes::Bytes;
 use redis::{ToRedisArgs, Value};
 use std::future::Future;
 use std::sync::OnceLock;
@@ -61,10 +59,10 @@ impl SyncGlideClient {
     ///
     /// ```rust,no_run
     /// # use glide::sync::SyncGlideClient;
-    /// # use glide::{GlideClientConfiguration, StringCommands};
-    /// # fn demo(client: SyncGlideClient) -> glide::Result<()> {
-    /// let ttl = client.run(|c| async move { c.get("key").await })?;
-    /// # let _ = ttl; Ok(()) }
+    /// # use glide::{AsyncCommands, GlideClientConfiguration};
+    /// # fn demo(client: SyncGlideClient) -> glide::RedisResult<()> {
+    /// let value: Option<String> = client.run(|c| async move { c.get("key").await })?;
+    /// # let _ = value; Ok(()) }
     /// ```
     pub fn run<F, Fut, T>(&self, f: F) -> T
     where
@@ -72,21 +70,6 @@ impl SyncGlideClient {
         Fut: Future<Output = T>,
     {
         runtime().block_on(f(self.inner.clone()))
-    }
-
-    /// Execute a [`Batch`] (blocking).
-    pub fn exec(&self, batch: &Batch, raise_on_error: bool) -> Result<Vec<Value>> {
-        runtime().block_on(self.inner.exec(batch, raise_on_error))
-    }
-
-    /// Execute a [`Batch`] with explicit [`BatchOptions`] (blocking).
-    pub fn exec_with_options(
-        &self,
-        batch: &Batch,
-        raise_on_error: bool,
-        options: &BatchOptions,
-    ) -> Result<Vec<Value>> {
-        runtime().block_on(self.inner.exec_with_options(batch, raise_on_error, options))
     }
 
     /// Update the connection password (blocking). See
@@ -107,49 +90,21 @@ impl SyncGlideClient {
         runtime().block_on(self.inner.custom_command(args))
     }
 
-    // ---- Common blocking conveniences ----
+    /// Execute a redis-rs [`redis::Pipeline`] with GLIDE execution options
+    /// (blocking). See [`crate::GlideClient::execute_pipeline`]; for plain
+    /// typed execution prefer [`PipelineExt::query_glide`].
+    pub fn execute_pipeline(
+        &self,
+        pipeline: &redis::Pipeline,
+        raise_on_error: bool,
+        options: &PipelineOptions,
+    ) -> Result<Vec<Value>> {
+        runtime().block_on(
+            self.inner
+                .execute_pipeline(pipeline, raise_on_error, options),
+        )
+    }
 
-    /// Blocking `GET`.
-    pub fn get<K: ToRedisArgs + Send>(&self, key: K) -> Result<Option<Bytes>> {
-        runtime().block_on(self.inner.get(key))
-    }
-    /// Blocking `SET`.
-    pub fn set<K: ToRedisArgs + Send, V: ToRedisArgs + Send>(
-        &self,
-        key: K,
-        value: V,
-    ) -> Result<()> {
-        runtime().block_on(self.inner.set(key, value))
-    }
-    /// Blocking `SET` with options.
-    pub fn set_options<K: ToRedisArgs + Send, V: ToRedisArgs + Send>(
-        &self,
-        key: K,
-        value: V,
-        options: SetOptions,
-    ) -> Result<Option<Bytes>> {
-        runtime().block_on(self.inner.set_options(key, value, options))
-    }
-    /// Blocking `DEL`.
-    pub fn del<K: ToRedisArgs + Send + Sync>(&self, keys: &[K]) -> Result<i64> {
-        runtime().block_on(self.inner.del(keys))
-    }
-    /// Blocking `EXISTS`.
-    pub fn exists<K: ToRedisArgs + Send + Sync>(&self, keys: &[K]) -> Result<i64> {
-        runtime().block_on(self.inner.exists(keys))
-    }
-    /// Blocking `INCR`.
-    pub fn incr<K: ToRedisArgs + Send>(&self, key: K) -> Result<i64> {
-        runtime().block_on(self.inner.incr(key))
-    }
-    /// Blocking `EXPIRE`.
-    pub fn expire<K: ToRedisArgs + Send>(&self, key: K, seconds: i64) -> Result<bool> {
-        runtime().block_on(self.inner.expire(key, seconds))
-    }
-    /// Blocking `TTL`.
-    pub fn ttl<K: ToRedisArgs + Send>(&self, key: K) -> Result<i64> {
-        runtime().block_on(self.inner.ttl(key))
-    }
     /// Blocking `PING`.
     pub fn ping(&self) -> Result<String> {
         runtime().block_on(self.inner.ping())
@@ -197,30 +152,6 @@ impl SyncGlideClusterClient {
         runtime().block_on(self.inner.custom_command_with_route(args, route))
     }
 
-    /// Execute a [`Batch`] (blocking).
-    pub fn exec(
-        &self,
-        batch: &Batch,
-        raise_on_error: bool,
-        route: Option<Route>,
-    ) -> Result<Vec<Value>> {
-        runtime().block_on(self.inner.exec(batch, raise_on_error, route))
-    }
-
-    /// Execute a [`Batch`] with explicit [`BatchOptions`] (blocking).
-    pub fn exec_with_options(
-        &self,
-        batch: &Batch,
-        raise_on_error: bool,
-        route: Option<Route>,
-        options: &BatchOptions,
-    ) -> Result<Vec<Value>> {
-        runtime().block_on(
-            self.inner
-                .exec_with_options(batch, raise_on_error, route, options),
-        )
-    }
-
     /// Update the connection password (blocking). See
     /// [`GlideClusterClient::update_connection_password`].
     pub fn update_connection_password(
@@ -231,6 +162,22 @@ impl SyncGlideClusterClient {
         runtime().block_on(
             self.inner
                 .update_connection_password(password, immediate_auth),
+        )
+    }
+
+    /// Execute a redis-rs [`redis::Pipeline`] with GLIDE execution options,
+    /// optionally routed (blocking). See
+    /// [`crate::GlideClusterClient::execute_pipeline`].
+    pub fn execute_pipeline(
+        &self,
+        pipeline: &redis::Pipeline,
+        raise_on_error: bool,
+        route: Option<crate::Route>,
+        options: &PipelineOptions,
+    ) -> Result<Vec<Value>> {
+        runtime().block_on(
+            self.inner
+                .execute_pipeline(pipeline, raise_on_error, route, options),
         )
     }
 
@@ -458,9 +405,9 @@ impl_sync_connection_like!(SyncGlideClusterClient, |_c: &SyncGlideClusterClient|
 macro_rules! impl_sync_owned_send {
     ($sync_ty:ty) => {
         impl crate::compat_commands::Commands for $sync_ty {
-            fn glide_send_owned_sync(&mut self, cmd: redis::Cmd) -> redis::RedisResult<Value> {
+            fn glide_send_owned_sync(&self, cmd: redis::Cmd) -> redis::RedisResult<Value> {
                 runtime().block_on(crate::compat_commands::AsyncCommands::glide_send_owned(
-                    &mut self.inner,
+                    &self.inner,
                     cmd,
                 ))
             }

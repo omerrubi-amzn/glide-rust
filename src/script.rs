@@ -79,7 +79,7 @@ impl Script {
     /// Invoke the script without keys or args.
     pub async fn invoke_async<C: AsyncCommands, T: FromRedisValue>(
         &self,
-        con: &mut C,
+        con: &C,
     ) -> RedisResult<T> {
         self.prepare_invoke().invoke_async(con).await
     }
@@ -89,14 +89,14 @@ impl Script {
     #[cfg(feature = "sync")]
     pub fn invoke<C: crate::compat_commands::Commands, T: FromRedisValue>(
         &self,
-        con: &mut C,
+        con: &C,
     ) -> RedisResult<T> {
         self.prepare_invoke().invoke(con)
     }
 
     /// Load the script into the server's script cache (`SCRIPT LOAD`) without
     /// running it; returns the SHA-1 hash.
-    pub async fn load_async<C: AsyncCommands>(&self, con: &mut C) -> RedisResult<String> {
+    pub async fn load_async<C: AsyncCommands>(&self, con: &C) -> RedisResult<String> {
         let mut load = cmd("SCRIPT");
         load.arg("LOAD").arg(self.code.as_bytes());
         redis::from_owned_redis_value(con.glide_send_owned(load).await?)
@@ -105,7 +105,7 @@ impl Script {
     /// Load the script into the server's script cache (`SCRIPT LOAD`) on a
     /// **blocking** connection; returns the SHA-1 hash.
     #[cfg(feature = "sync")]
-    pub fn load<C: crate::compat_commands::Commands>(&self, con: &mut C) -> RedisResult<String> {
+    pub fn load<C: crate::compat_commands::Commands>(&self, con: &C) -> RedisResult<String> {
         let mut load = cmd("SCRIPT");
         load.arg("LOAD").arg(self.code.as_bytes());
         redis::from_owned_redis_value(con.glide_send_owned_sync(load)?)
@@ -158,7 +158,7 @@ impl ScriptInvocation<'_> {
     /// server does not have the script cached (`NOSCRIPT`).
     pub async fn invoke_async<C: AsyncCommands, T: FromRedisValue>(
         &self,
-        con: &mut C,
+        con: &C,
     ) -> RedisResult<T> {
         match con.glide_send_owned(self.evalsha_cmd()).await {
             Err(err) if err.kind() == ErrorKind::NoScriptError => {
@@ -175,7 +175,7 @@ impl ScriptInvocation<'_> {
     #[cfg(feature = "sync")]
     pub fn invoke<C: crate::compat_commands::Commands, T: FromRedisValue>(
         &self,
-        con: &mut C,
+        con: &C,
     ) -> RedisResult<T> {
         match con.glide_send_owned_sync(self.evalsha_cmd()) {
             Err(err) if err.kind() == ErrorKind::NoScriptError => {
