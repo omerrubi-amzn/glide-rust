@@ -5,10 +5,10 @@
 //! connects to a cluster. Both wrap the shared `glide_core::client::Client` and
 //! implement [`CommandExecutor`], so all command family traits apply to them.
 
-use crate::batch::{Batch, BatchOptions, run_batch};
 use crate::config::{GlideClientConfiguration, GlideClusterClientConfiguration};
 use crate::error::{GlideError, Result};
 use crate::executor::CommandExecutor;
+use crate::pipeline_options::{PipelineOptions, run_pipeline};
 use crate::routes::Route;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -159,11 +159,13 @@ impl Default for ClusterScanCursor {
 pub struct GlideClient {
     inner: CoreClient,
     pubsub_rx: Option<PushRx>,
+    db: i64,
 }
 
 impl GlideClient {
     /// Connect using the given standalone configuration.
     pub async fn connect(config: GlideClientConfiguration) -> Result<Self> {
+        let db = config.database_id;
         let request = config.to_request();
         let has_subs = config
             .pubsub_subscriptions
@@ -173,12 +175,22 @@ impl GlideClient {
         let inner = CoreClient::new(request, sender)
             .await
             .map_err(GlideError::from)?;
-        Ok(GlideClient { inner, pubsub_rx })
+        Ok(GlideClient {
+            inner,
+            pubsub_rx,
+            db,
+        })
     }
 
     /// Access the underlying `glide-core` client (advanced use).
     pub fn core(&self) -> &CoreClient {
         &self.inner
+    }
+
+    /// The configured logical database index (crate-internal; reported to
+    /// the pipeline adapter in `client/connection.rs`).
+    pub(crate) fn db(&self) -> i64 {
+        self.db
     }
 
     /// Wait for the next Pub/Sub message on this client's configured
@@ -228,29 +240,20 @@ impl GlideClient {
         }
     }
 
-    /// Execute a [`Batch`] (pipeline or transaction) and return the per-command
-    /// replies. When `raise_on_error` is `true`, the first errored command aborts
-    /// with an error; otherwise error replies are returned inline.
-    pub async fn exec(&self, batch: &Batch, raise_on_error: bool) -> Result<Vec<Value>> {
-        run_batch(
-            &self.inner,
-            batch,
-            None,
-            raise_on_error,
-            &BatchOptions::default(),
-        )
-        .await
-    }
-
-    /// Execute a [`Batch`] with explicit [`BatchOptions`] (timeout, pipeline
-    /// retry strategy). See [`Self::exec`].
-    pub async fn exec_with_options(
+    /// Execute a [`redis::Pipeline`] with GLIDE execution options
+    /// (per-call timeout, pipeline retry policy) and return the raw per-command
+    /// replies. Build with [`crate::pipe()`]; `.atomic()` pipelines run as a
+    /// `MULTI`/`EXEC` transaction. For plain typed execution prefer
+    /// [`PipelineExt::query_glide`]. When `raise_on_error` is `true`, the
+    /// first errored command aborts with an error; otherwise error replies are
+    /// returned inline.
+    pub async fn execute_pipeline(
         &self,
-        batch: &Batch,
+        pipeline: &redis::Pipeline,
         raise_on_error: bool,
-        options: &BatchOptions,
+        options: &PipelineOptions,
     ) -> Result<Vec<Value>> {
-        run_batch(&self.inner, batch, None, raise_on_error, options).await
+        run_pipeline(&self.inner, pipeline, None, raise_on_error, options).await
     }
 
     /// Update the password used by this client to authenticate with the server,
@@ -376,35 +379,17 @@ impl GlideClusterClient {
             .map_err(GlideError::from)
     }
 
-    /// Execute a [`Batch`] (pipeline or transaction), optionally routed.
-    pub async fn exec(
+    /// Execute a [`redis::Pipeline`] with GLIDE execution options,
+    /// optionally routed. See [`crate::GlideClient::execute_pipeline`].
+    pub async fn execute_pipeline(
         &self,
-        batch: &Batch,
+        pipeline: &redis::Pipeline,
         raise_on_error: bool,
         route: Option<Route>,
+        options: &PipelineOptions,
     ) -> Result<Vec<Value>> {
         let routing = route.map(|r| r.to_routing_info(None));
-        run_batch(
-            &self.inner,
-            batch,
-            routing,
-            raise_on_error,
-            &BatchOptions::default(),
-        )
-        .await
-    }
-
-    /// Execute a [`Batch`] with explicit [`BatchOptions`] (timeout, pipeline
-    /// retry strategy), optionally routed. See [`Self::exec`].
-    pub async fn exec_with_options(
-        &self,
-        batch: &Batch,
-        raise_on_error: bool,
-        route: Option<Route>,
-        options: &BatchOptions,
-    ) -> Result<Vec<Value>> {
-        let routing = route.map(|r| r.to_routing_info(None));
-        run_batch(&self.inner, batch, routing, raise_on_error, options).await
+        run_pipeline(&self.inner, pipeline, routing, raise_on_error, options).await
     }
 
     /// Update the password used by this client to authenticate with the cluster,
@@ -500,5 +485,32 @@ impl CommandExecutor for GlideClusterClient {
             .send_command(&mut cmd, routing)
             .await
             .map_err(GlideError::from)
+    }
+}
+
+mod connection;
+
+pub use connection::{GlidePipelineTarget, PipelineExt};
+
+// ---- unified command API dispatch ---------------------------------------------
+//
+// `glide::AsyncCommands` methods build the `Cmd` themselves and hand it here
+// **by value**: one copy to build, glide-core's internal owned copy, nothing
+// else — this is the client's primary command path.
+
+impl crate::commands::core::AsyncCommands for GlideClient {
+    fn glide_send_owned<'a>(&'a self, mut cmd: Cmd) -> redis::RedisFuture<'a, Value> {
+        // `Client` is Clone (Arc inside); operate on a cheap clone so the
+        // unified API can take `&self` — same pattern as `execute_command`.
+        let mut client = self.inner.clone();
+        Box::pin(async move { client.send_command(&mut cmd, None).await })
+    }
+}
+
+impl crate::commands::core::AsyncCommands for GlideClusterClient {
+    fn glide_send_owned<'a>(&'a self, mut cmd: Cmd) -> redis::RedisFuture<'a, Value> {
+        // Routing is decided by glide-core from the command's keys.
+        let mut client = self.inner.clone();
+        Box::pin(async move { client.send_command(&mut cmd, None).await })
     }
 }

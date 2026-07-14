@@ -3,43 +3,8 @@
 use super::Mock;
 use crate::commands::bitmap::{
     BitEncoding, BitFieldOffset, BitFieldSubcommand, BitmapCommands, BitmapIndexType,
-    BitwiseOperation,
 };
 use redis::Value;
-
-#[tokio::test]
-async fn setbit_getbit() {
-    let m = Mock::int(0);
-    assert_eq!(m.setbit("k", 7, 1).await.unwrap(), 0);
-    m.assert_args(&["SETBIT", "k", "7", "1"]);
-
-    let m = Mock::int(1);
-    assert_eq!(m.getbit("k", 7).await.unwrap(), 1);
-    m.assert_args(&["GETBIT", "k", "7"]);
-}
-
-#[tokio::test]
-async fn bitcount_and_range() {
-    let m = Mock::int(10);
-    assert_eq!(m.bitcount("k").await.unwrap(), 10);
-    m.assert_args(&["BITCOUNT", "k"]);
-
-    let m = Mock::int(4);
-    m.bitcount_range("k", 0, 10, None).await.unwrap();
-    m.assert_args(&["BITCOUNT", "k", "0", "10"]);
-
-    let m = Mock::int(4);
-    m.bitcount_range("k", 0, 10, Some(BitmapIndexType::Byte))
-        .await
-        .unwrap();
-    m.assert_args(&["BITCOUNT", "k", "0", "10", "BYTE"]);
-
-    let m = Mock::int(4);
-    m.bitcount_range("k", 0, 10, Some(BitmapIndexType::Bit))
-        .await
-        .unwrap();
-    m.assert_args(&["BITCOUNT", "k", "0", "10", "BIT"]);
-}
 
 #[tokio::test]
 async fn bitpos_and_range() {
@@ -108,19 +73,4 @@ async fn bitfield_readonly() {
     .await
     .unwrap();
     m.assert_args(&["BITFIELD_RO", "k", "GET", "u8", "0"]);
-}
-
-#[tokio::test]
-async fn bitop_variants() {
-    let m = Mock::int(8);
-    m.bitop(BitwiseOperation::And, "dest", &["k1", "k2"])
-        .await
-        .unwrap();
-    m.assert_args(&["BITOP", "AND", "dest", "k1", "k2"]);
-
-    let m = Mock::int(8);
-    m.bitop(BitwiseOperation::Not, "dest", &["k1"])
-        .await
-        .unwrap();
-    m.assert_args(&["BITOP", "NOT", "dest", "k1"]);
 }

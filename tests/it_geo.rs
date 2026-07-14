@@ -4,7 +4,7 @@
 mod common;
 
 use glide::commands::geo::{GeoUnit, GeospatialData};
-use glide::{GeoCommands, StringCommands};
+use glide::{AsyncCommands, GeoCommands};
 
 fn palermo() -> GeospatialData {
     GeospatialData {
@@ -90,6 +90,6 @@ matrix_test!(geosearch_by_radius, c, {
 
 matrix_test!(geo_wrong_type_errors, c, {
     let k = common::key("wt");
-    c.set(&k, "notgeo").await.unwrap();
+    c.set::<_, _, ()>(&k, "notgeo").await.unwrap();
     assert_request_error!(c.geoadd(&k, &[("X", palermo())]).await);
 });

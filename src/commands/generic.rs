@@ -1,9 +1,7 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
 //! Generic (key) commands. Mirrors Python's generic command surface.
 
-use crate::commands::options::{
-    ExpireOptions, Limit, MigrateOptions, ObjectType, OrderBy, RestoreOptions,
-};
+use crate::commands::options::{Limit, MigrateOptions, ObjectType, OrderBy, RestoreOptions};
 use crate::error::Result;
 use crate::executor::CommandExecutor;
 use crate::value;
@@ -14,96 +12,30 @@ use redis::{Cmd, ToRedisArgs};
 /// Generic key-space commands (`DEL`, `EXISTS`, `EXPIRE`, `TTL`, `RENAME`, ...).
 #[async_trait]
 pub trait GenericCommands: CommandExecutor {
-    /// Delete the given keys, returning the number removed.
-    async fn del<K: ToRedisArgs + Send + Sync>(&self, keys: &[K]) -> Result<i64> {
-        let mut cmd = Cmd::new();
-        cmd.arg("DEL");
-        for k in keys {
-            cmd.arg(k);
-        }
-        value::to_i64(self.execute_command(cmd, None).await?)
-    }
-
-    /// Unlink (async delete) the given keys, returning the number removed.
-    async fn unlink<K: ToRedisArgs + Send + Sync>(&self, keys: &[K]) -> Result<i64> {
-        let mut cmd = Cmd::new();
-        cmd.arg("UNLINK");
-        for k in keys {
-            cmd.arg(k);
-        }
-        value::to_i64(self.execute_command(cmd, None).await?)
-    }
-
-    /// Count how many of the given keys exist (`EXISTS`).
-    async fn exists<K: ToRedisArgs + Send + Sync>(&self, keys: &[K]) -> Result<i64> {
-        let mut cmd = Cmd::new();
-        cmd.arg("EXISTS");
-        for k in keys {
-            cmd.arg(k);
-        }
-        value::to_i64(self.execute_command(cmd, None).await?)
-    }
-
-    /// Set a timeout on `key`, in seconds (`EXPIRE`).
-    async fn expire<K: ToRedisArgs + Send>(&self, key: K, seconds: i64) -> Result<bool> {
-        let mut cmd = Cmd::new();
-        cmd.arg("EXPIRE").arg(key).arg(seconds);
-        value::to_bool(self.execute_command(cmd, None).await?)
-    }
-
-    /// Set a timeout on `key`, in seconds, with a condition (`EXPIRE ... NX|XX|GT|LT`).
-    async fn expire_opts<K: ToRedisArgs + Send>(
+    /// Iterate the keyspace with `SCAN`, with `MATCH`/`COUNT`/`TYPE` options
+    /// (cursor-style). Returns `(cursor, keys)`; a returned cursor of `"0"`
+    /// indicates iteration is complete. For simple iteration prefer the
+    /// unified [`crate::AsyncCommands::scan_match`] iterator.
+    async fn scan_cursor(
         &self,
-        key: K,
-        seconds: i64,
-        option: ExpireOptions,
-    ) -> Result<bool> {
+        cursor: &str,
+        pattern: Option<&[u8]>,
+        count: Option<i64>,
+        type_filter: Option<ObjectType>,
+    ) -> Result<(String, Vec<Bytes>)> {
         let mut cmd = Cmd::new();
-        cmd.arg("EXPIRE").arg(key).arg(seconds);
-        option.add_to(&mut cmd);
-        value::to_bool(self.execute_command(cmd, None).await?)
-    }
-
-    /// Set a timeout on `key`, in milliseconds (`PEXPIRE`).
-    async fn pexpire<K: ToRedisArgs + Send>(&self, key: K, millis: i64) -> Result<bool> {
-        let mut cmd = Cmd::new();
-        cmd.arg("PEXPIRE").arg(key).arg(millis);
-        value::to_bool(self.execute_command(cmd, None).await?)
-    }
-
-    /// Set expiry as an absolute Unix time in seconds (`EXPIREAT`).
-    async fn expireat<K: ToRedisArgs + Send>(&self, key: K, unix_seconds: i64) -> Result<bool> {
-        let mut cmd = Cmd::new();
-        cmd.arg("EXPIREAT").arg(key).arg(unix_seconds);
-        value::to_bool(self.execute_command(cmd, None).await?)
-    }
-
-    /// Set expiry as an absolute Unix time in milliseconds (`PEXPIREAT`).
-    async fn pexpireat<K: ToRedisArgs + Send>(&self, key: K, unix_millis: i64) -> Result<bool> {
-        let mut cmd = Cmd::new();
-        cmd.arg("PEXPIREAT").arg(key).arg(unix_millis);
-        value::to_bool(self.execute_command(cmd, None).await?)
-    }
-
-    /// Remove the timeout on `key` (`PERSIST`).
-    async fn persist<K: ToRedisArgs + Send>(&self, key: K) -> Result<bool> {
-        let mut cmd = Cmd::new();
-        cmd.arg("PERSIST").arg(key);
-        value::to_bool(self.execute_command(cmd, None).await?)
-    }
-
-    /// Get the remaining TTL of `key` in seconds (`TTL`). `-2` if no key, `-1` if no expiry.
-    async fn ttl<K: ToRedisArgs + Send>(&self, key: K) -> Result<i64> {
-        let mut cmd = Cmd::new();
-        cmd.arg("TTL").arg(key);
-        value::to_i64(self.execute_command(cmd, None).await?)
-    }
-
-    /// Get the remaining TTL of `key` in milliseconds (`PTTL`).
-    async fn pttl<K: ToRedisArgs + Send>(&self, key: K) -> Result<i64> {
-        let mut cmd = Cmd::new();
-        cmd.arg("PTTL").arg(key);
-        value::to_i64(self.execute_command(cmd, None).await?)
+        cmd.arg("SCAN").arg(cursor);
+        if let Some(p) = pattern {
+            cmd.arg("MATCH").arg(p);
+        }
+        if let Some(c) = count {
+            cmd.arg("COUNT").arg(c);
+        }
+        if let Some(t) = type_filter {
+            cmd.arg("TYPE").arg(t.to_redis().to_string().to_lowercase());
+        }
+        let reply = self.execute_command(cmd, None).await?;
+        parse_scan_reply(reply)
     }
 
     /// Get the absolute expiry Unix time in seconds (`EXPIRETIME`).
@@ -118,35 +50,6 @@ pub trait GenericCommands: CommandExecutor {
         let mut cmd = Cmd::new();
         cmd.arg("PEXPIRETIME").arg(key);
         value::to_i64(self.execute_command(cmd, None).await?)
-    }
-
-    /// Determine the type of `key` (`TYPE`).
-    async fn key_type<K: ToRedisArgs + Send>(&self, key: K) -> Result<String> {
-        let mut cmd = Cmd::new();
-        cmd.arg("TYPE").arg(key);
-        value::to_string(self.execute_command(cmd, None).await?)
-    }
-
-    /// Rename `key` to `new_key` (`RENAME`).
-    async fn rename<K: ToRedisArgs + Send, N: ToRedisArgs + Send>(
-        &self,
-        key: K,
-        new_key: N,
-    ) -> Result<()> {
-        let mut cmd = Cmd::new();
-        cmd.arg("RENAME").arg(key).arg(new_key);
-        value::to_unit(self.execute_command(cmd, None).await?)
-    }
-
-    /// Rename `key` to `new_key` only if `new_key` does not exist (`RENAMENX`).
-    async fn renamenx<K: ToRedisArgs + Send, N: ToRedisArgs + Send>(
-        &self,
-        key: K,
-        new_key: N,
-    ) -> Result<bool> {
-        let mut cmd = Cmd::new();
-        cmd.arg("RENAMENX").arg(key).arg(new_key);
-        value::to_bool(self.execute_command(cmd, None).await?)
     }
 
     /// Return a random key from the keyspace (`RANDOMKEY`).
@@ -186,70 +89,6 @@ pub trait GenericCommands: CommandExecutor {
             cmd.arg("REPLACE");
         }
         value::to_bool(self.execute_command(cmd, None).await?)
-    }
-
-    /// Get the reference count of the value at `key` (`OBJECT REFCOUNT`).
-    async fn object_refcount<K: ToRedisArgs + Send>(&self, key: K) -> Result<Option<i64>> {
-        let mut cmd = Cmd::new();
-        cmd.arg("OBJECT").arg("REFCOUNT").arg(key);
-        let v = self.execute_command(cmd, None).await?;
-        match v {
-            redis::Value::Nil => Ok(None),
-            other => Ok(Some(value::to_i64(other)?)),
-        }
-    }
-
-    /// Get the internal encoding of the value at `key` (`OBJECT ENCODING`).
-    async fn object_encoding<K: ToRedisArgs + Send>(&self, key: K) -> Result<Option<Bytes>> {
-        let mut cmd = Cmd::new();
-        cmd.arg("OBJECT").arg("ENCODING").arg(key);
-        value::to_opt_bytes(self.execute_command(cmd, None).await?)
-    }
-
-    /// Get the idle time (seconds) of the value at `key` (`OBJECT IDLETIME`).
-    async fn object_idletime<K: ToRedisArgs + Send>(&self, key: K) -> Result<Option<i64>> {
-        let mut cmd = Cmd::new();
-        cmd.arg("OBJECT").arg("IDLETIME").arg(key);
-        let v = self.execute_command(cmd, None).await?;
-        match v {
-            redis::Value::Nil => Ok(None),
-            other => Ok(Some(value::to_i64(other)?)),
-        }
-    }
-
-    /// Get the logarithmic access frequency counter (`OBJECT FREQ`).
-    async fn object_freq<K: ToRedisArgs + Send>(&self, key: K) -> Result<Option<i64>> {
-        let mut cmd = Cmd::new();
-        cmd.arg("OBJECT").arg("FREQ").arg(key);
-        let v = self.execute_command(cmd, None).await?;
-        match v {
-            redis::Value::Nil => Ok(None),
-            other => Ok(Some(value::to_i64(other)?)),
-        }
-    }
-
-    /// Iterate the keyspace with `SCAN`. Returns `(cursor, keys)`.
-    /// A returned cursor of `"0"` indicates iteration is complete.
-    async fn scan(
-        &self,
-        cursor: &str,
-        pattern: Option<&[u8]>,
-        count: Option<i64>,
-        type_filter: Option<ObjectType>,
-    ) -> Result<(String, Vec<Bytes>)> {
-        let mut cmd = Cmd::new();
-        cmd.arg("SCAN").arg(cursor);
-        if let Some(p) = pattern {
-            cmd.arg("MATCH").arg(p);
-        }
-        if let Some(c) = count {
-            cmd.arg("COUNT").arg(c);
-        }
-        if let Some(t) = type_filter {
-            cmd.arg("TYPE").arg(t.as_arg());
-        }
-        let reply = self.execute_command(cmd, None).await?;
-        parse_scan_reply(reply)
     }
 
     /// Sort the elements at `key` (`SORT`), optionally by order and with an
@@ -401,32 +240,6 @@ pub trait GenericCommands: CommandExecutor {
         value::to_unit(self.execute_command(cmd, None).await?)
     }
 
-    /// Atomically transfer multiple keys to another instance
-    /// (`MIGRATE ... KEYS key...`). The single-key slot is left empty (`""`).
-    async fn migrate_keys<H: ToRedisArgs + Send, K: ToRedisArgs + Send + Sync>(
-        &self,
-        host: H,
-        port: i64,
-        keys: &[K],
-        destination_db: i64,
-        timeout_ms: i64,
-        options: MigrateOptions,
-    ) -> Result<()> {
-        let mut cmd = Cmd::new();
-        cmd.arg("MIGRATE")
-            .arg(host)
-            .arg(port)
-            .arg("")
-            .arg(destination_db)
-            .arg(timeout_ms);
-        options.add_to(&mut cmd);
-        cmd.arg("KEYS");
-        for k in keys {
-            cmd.arg(k);
-        }
-        value::to_unit(self.execute_command(cmd, None).await?)
-    }
-
     /// Watch the given keys for changes before a transaction (`WATCH`).
     async fn watch<K: ToRedisArgs + Send + Sync>(&self, keys: &[K]) -> Result<()> {
         let mut cmd = Cmd::new();
@@ -456,7 +269,12 @@ pub(crate) fn parse_scan_reply(reply: redis::Value) -> Result<(String, Vec<Bytes
                     .into_iter()
                     .map(value::to_bytes)
                     .collect::<Result<Vec<_>>>()?,
-                _ => Vec::new(),
+                redis::Value::Nil => Vec::new(),
+                other => {
+                    return Err(crate::error::GlideError::Request(format!(
+                        "unexpected SCAN keys shape: {other:?}"
+                    )));
+                }
             };
             Ok((cursor, keys))
         }
@@ -467,3 +285,17 @@ pub(crate) fn parse_scan_reply(reply: redis::Value) -> Result<(String, Vec<Bytes
 }
 
 impl<T: CommandExecutor + ?Sized> GenericCommands for T {}
+
+#[cfg(test)]
+mod scan_arg_probe {
+    #[test]
+    fn scan_type_arg_encoding() {
+        // strum's Display renders the variant name ("ZSet"); the wire arg
+        // must be the lowercase type name the server expects.
+        let s = crate::commands::options::ObjectType::ZSet
+            .to_redis()
+            .to_string()
+            .to_lowercase();
+        assert_eq!(s, "zset");
+    }
+}

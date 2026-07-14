@@ -19,6 +19,26 @@ resp_test!(publish_no_subscribers_returns_zero, c, {
     assert_eq!(glide::value::to_i64(received).unwrap(), 0);
 });
 
+// Compile-lock for the "names never collide — import both freely" contract:
+// with the ENTIRE crate surface glob-imported (unified traits + every
+// extension trait via the prelude), `publish` must resolve uniquely to the
+// unified `AsyncCommands` method. A duplicate in any extension trait would
+// fail compilation here with E0034 (multiple applicable items in scope).
+mod glob_import_lock {
+    use glide::*;
+
+    pub async fn publish_via_glob(c: &GlideClient, chan: &str) -> RedisResult<i64> {
+        c.publish(chan, "nobody-listens").await
+    }
+}
+
+resp_test!(glob_import_publish_resolves_unambiguously, c, {
+    let n = glob_import_lock::publish_via_glob(&c, &common::key("glob_pub"))
+        .await
+        .unwrap();
+    assert_eq!(n, 0);
+});
+
 resp_test!(pubsub_channels_empty, c, {
     let reply = c.custom_command(&["PUBSUB", "CHANNELS"]).await.unwrap();
     // No active subscriptions on a fresh server.
@@ -47,6 +67,7 @@ resp_test!(spublish_no_subscribers, c, {
 
 timed_tokio_test!(
     async fn runtime_subscribe_receives_then_unsubscribe() {
+        use glide::AsyncCommands;
         use glide::commands::pubsub::PubSubCommands;
         use glide::{GlideClient, GlideClientConfiguration};
         use std::time::Duration;
@@ -76,7 +97,7 @@ timed_tokio_test!(
             "subscription was not registered server-side in time"
         );
 
-        let n = publisher.publish(&chan, "runtime-hello").await.unwrap();
+        let n: i64 = publisher.publish(&chan, "runtime-hello").await.unwrap();
         assert!(n >= 1, "expected >=1 subscriber, got {n}");
 
         let msg = tokio::time::timeout(Duration::from_secs(3), subscriber.get_pubsub_message())
@@ -92,13 +113,14 @@ timed_tokio_test!(
             common::wait_for_numsub(&publisher, &chan, |n| n == 0, Duration::from_secs(3)).await,
             "unsubscribe did not take effect server-side in time"
         );
-        let n2 = publisher.publish(&chan, "after-unsub").await.unwrap();
+        let n2: i64 = publisher.publish(&chan, "after-unsub").await.unwrap();
         assert_eq!(n2, 0, "no subscribers should remain after unsubscribe");
     }
 );
 
 timed_tokio_test!(
     async fn runtime_psubscribe_pattern_receive() {
+        use glide::AsyncCommands;
         use glide::commands::pubsub::PubSubCommands;
         use glide::{GlideClient, GlideClientConfiguration, PubSubMessageKind};
         use std::time::Duration;
@@ -123,7 +145,7 @@ timed_tokio_test!(
             "pattern subscription was not registered server-side in time"
         );
 
-        publisher.publish("news.tech", "breaking").await.unwrap();
+        let _: i64 = publisher.publish("news.tech", "breaking").await.unwrap();
 
         let msg = tokio::time::timeout(Duration::from_secs(3), subscriber.get_pubsub_message())
             .await
@@ -137,6 +159,7 @@ timed_tokio_test!(
 
 timed_tokio_test!(
     async fn runtime_unsubscribe_all_stops_delivery() {
+        use glide::AsyncCommands;
         use glide::commands::pubsub::PubSubCommands;
         use glide::{GlideClient, GlideClientConfiguration};
         use std::time::Duration;
@@ -165,7 +188,7 @@ timed_tokio_test!(
             common::wait_for_numsub(&publisher, &c1, |n| n >= 1, Duration::from_secs(3)).await,
             "subscription c1 not registered in time"
         );
-        assert!(publisher.publish(&c1, "x").await.unwrap() >= 1);
+        assert!(publisher.publish::<_, _, i64>(&c1, "x").await.unwrap() >= 1);
 
         // Unsubscribe from ALL exact channels (empty slice).
         subscriber.unsubscribe(&[] as &[&str]).await.unwrap();
@@ -175,7 +198,7 @@ timed_tokio_test!(
                     .await,
             "unsubscribe-all did not take effect server-side in time"
         );
-        assert_eq!(publisher.publish(&c1, "y").await.unwrap(), 0);
-        assert_eq!(publisher.publish(&c2, "z").await.unwrap(), 0);
+        assert_eq!(publisher.publish::<_, _, i64>(&c1, "y").await.unwrap(), 0);
+        assert_eq!(publisher.publish::<_, _, i64>(&c2, "z").await.unwrap(), 0);
     }
 );

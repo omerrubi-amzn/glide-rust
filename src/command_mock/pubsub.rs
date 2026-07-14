@@ -5,12 +5,9 @@ use crate::commands::pubsub::PubSubCommands;
 use bytes::Bytes;
 use redis::Value;
 
-#[tokio::test]
-async fn publish_encoding_and_count() {
-    let m = Mock::int(3);
-    assert_eq!(m.publish("ch", "hello").await.unwrap(), 3);
-    m.assert_args(&["PUBLISH", "ch", "hello"]);
-}
+// NOTE: no `publish` test here — `PUBLISH` moved to the unified command table
+// (`glide::AsyncCommands`), whose encoding delegates to the fork's own
+// `Cmd::publish` constructor (covered by the signature-parity guard).
 
 #[tokio::test]
 async fn spublish_encoding() {

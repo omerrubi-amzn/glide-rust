@@ -27,32 +27,6 @@ impl BitmapIndexType {
     }
 }
 
-/// Bitwise operation for `BITOP`.
-///
-/// Mirrors Python `BitwiseOperation`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BitwiseOperation {
-    /// Bitwise AND.
-    And,
-    /// Bitwise OR.
-    Or,
-    /// Bitwise XOR.
-    Xor,
-    /// Bitwise NOT.
-    Not,
-}
-
-impl BitwiseOperation {
-    fn as_arg(&self) -> &'static str {
-        match self {
-            BitwiseOperation::And => "AND",
-            BitwiseOperation::Or => "OR",
-            BitwiseOperation::Xor => "XOR",
-            BitwiseOperation::Not => "NOT",
-        }
-    }
-}
-
 /// A signed or unsigned bit encoding for `BITFIELD`/`BITFIELD_RO`.
 ///
 /// Mirrors Python `SignedEncoding`/`UnsignedEncoding`.
@@ -186,43 +160,6 @@ impl BitFieldSubcommand {
 /// Bitmap commands (`SETBIT`, `GETBIT`, `BITCOUNT`, `BITPOS`, `BITOP`).
 #[async_trait]
 pub trait BitmapCommands: CommandExecutor {
-    /// Set or clear the bit at `offset` (`SETBIT`). Returns the previous bit.
-    async fn setbit<K: ToRedisArgs + Send>(&self, key: K, offset: u64, value: u8) -> Result<i64> {
-        let mut cmd = Cmd::new();
-        cmd.arg("SETBIT").arg(key).arg(offset).arg(value);
-        crate::value::to_i64(self.execute_command(cmd, None).await?)
-    }
-
-    /// Get the bit at `offset` (`GETBIT`).
-    async fn getbit<K: ToRedisArgs + Send>(&self, key: K, offset: u64) -> Result<i64> {
-        let mut cmd = Cmd::new();
-        cmd.arg("GETBIT").arg(key).arg(offset);
-        value::to_i64(self.execute_command(cmd, None).await?)
-    }
-
-    /// Count set bits in the whole string (`BITCOUNT`).
-    async fn bitcount<K: ToRedisArgs + Send>(&self, key: K) -> Result<i64> {
-        let mut cmd = Cmd::new();
-        cmd.arg("BITCOUNT").arg(key);
-        value::to_i64(self.execute_command(cmd, None).await?)
-    }
-
-    /// Count set bits in a range (`BITCOUNT key start end [BYTE|BIT]`).
-    async fn bitcount_range<K: ToRedisArgs + Send>(
-        &self,
-        key: K,
-        start: i64,
-        end: i64,
-        index_type: Option<BitmapIndexType>,
-    ) -> Result<i64> {
-        let mut cmd = Cmd::new();
-        cmd.arg("BITCOUNT").arg(key).arg(start).arg(end);
-        if let Some(it) = index_type {
-            cmd.arg(it.as_arg());
-        }
-        value::to_i64(self.execute_command(cmd, None).await?)
-    }
-
     /// Find the position of the first bit set to `bit` (`BITPOS`).
     async fn bitpos<K: ToRedisArgs + Send>(&self, key: K, bit: u8) -> Result<i64> {
         let mut cmd = Cmd::new();
@@ -276,21 +213,6 @@ pub trait BitmapCommands: CommandExecutor {
             sub.add_to(&mut cmd);
         }
         parse_bitfield(self.execute_command(cmd, None).await?)
-    }
-
-    /// Perform a bitwise operation across keys, storing into `destination` (`BITOP`).
-    async fn bitop<D: ToRedisArgs + Send, K: ToRedisArgs + Send + Sync>(
-        &self,
-        operation: BitwiseOperation,
-        destination: D,
-        keys: &[K],
-    ) -> Result<i64> {
-        let mut cmd = Cmd::new();
-        cmd.arg("BITOP").arg(operation.as_arg()).arg(destination);
-        for k in keys {
-            cmd.arg(k);
-        }
-        value::to_i64(self.execute_command(cmd, None).await?)
     }
 }
 

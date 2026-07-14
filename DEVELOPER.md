@@ -63,10 +63,18 @@ src/
   routes.rs       cluster routing (Route -> RoutingInfo)
   value.rs        redis::Value -> typed Rust conversions (RESP2 + RESP3)
   executor.rs     CommandExecutor seam + custom_command
-  client.rs       GlideClient / GlideClusterClient (async)
-  batch.rs        Batch / transaction
+  client/
+    mod.rs        GlideClient / GlideClusterClient (async)
+    connection.rs typed Pipeline execution (PipelineExt::query_glide)
+  pipeline_options.rs  Pipeline execution options (execute_pipeline)
+  script.rs       Script (SHA-caching EVALSHA with EVAL fallback)
+  telemetry.rs    OpenTelemetry config + init
   sync/mod.rs     blocking clients over a shared runtime
-  commands/       one module per command family (blanket-impl traits)
+  commands/
+    core.rs       the unified command table (AsyncCommands / Commands)
+    scan.rs       GLIDE-owned scan iterators
+    <family>.rs   extension traits (blanket impls over CommandExecutor)
+  command_mock/   server-free encoding/decoding tests for the extensions
 tests/
   common/mod.rs   ephemeral server + cluster harness
   it_*.rs         per-family live tests (one file per command family)
@@ -89,3 +97,30 @@ Because the client negotiates **RESP3** by default, replies may arrive as
 `Value::Map`, `Value::Double`, `Value::Boolean`, or `Value::VerbatimString`.
 Prefer the helpers in `src/value.rs`, which already normalize these, and add new
 shapes there rather than in individual commands.
+
+## Maintaining the unified command table
+
+The unified `AsyncCommands` / `Commands` traits are defined by the
+**hand-maintained** command table in `src/commands/core.rs` (one
+`implement_glide_commands!` invocation; each `fn name<G: Bound>(args);` entry
+expands to both the async and the blocking method, delegating to the fork's
+`Cmd::<name>()` constructor for identical wire encoding).
+
+To add or change an entry, edit the table directly — then run the
+signature-parity guard, which compares every entry against the vendored
+redis-rs fork's `implement_commands!` table (names, generic order, argument
+lists) and fails on any divergence. It also checks the `scan*` methods
+(names, generics, and arguments must match the fork's macro definitions;
+receivers and return types deliberately deviate — GLIDE-owned iterators on
+the owned-send path, see `src/commands/scan.rs`):
+
+```bash
+python3 tools/verify_command_table.py   # standalone
+cargo test --test it_parity_guard      # same check as a test (skips without python/fork)
+```
+
+When the pinned fork rev is bumped, run the verifier to see what changed in
+the fork's surface, update the table deliberately, and refresh the pinned rev
+references (`NOTICE`). Commands beyond the fork's surface belong
+in the per-family extension traits (`src/commands/<family>.rs`), not in the
+table.

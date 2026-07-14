@@ -3,7 +3,7 @@
 
 mod common;
 
-use glide::{ConnectionManagementCommands, StringCommands};
+use glide::{AsyncCommands, ConnectionManagementCommands};
 
 resp_test!(ping, c, {
     assert_eq!(c.ping().await.unwrap(), "PONG");
@@ -41,7 +41,8 @@ resp_test!(select_database, c, {
     // SELECT another DB then operate there.
     c.select(1).await.unwrap();
     let k = common::key("k");
-    c.set(&k, "v").await.unwrap();
-    assert_eq!(c.get(&k).await.unwrap().as_deref(), Some(&b"v"[..]));
+    let _: () = c.set(&k, "v").await.unwrap();
+    let got: Option<glide::Bytes> = c.get(&k).await.unwrap();
+    assert_eq!(got.as_deref(), Some(&b"v"[..]));
     c.select(0).await.unwrap();
 });

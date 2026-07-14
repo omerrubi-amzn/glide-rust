@@ -2,7 +2,8 @@
 
 ## Dependency strategy
 The crate declares **git ("remote") dependencies** on both `glide-core` and its
-*vendored* `redis` (redis-rs fork), pinned to the same commit of the canonical
+*vendored* `redis` (the redis-rs fork, v0.25.2 — predating the upstream
+license change), pinned to the same commit of the canonical
 `valkey-io/valkey-glide` repository:
 
 ```toml
@@ -35,27 +36,56 @@ what every other wrapper does.
 additionally accepts a `Route` on command variants (via dedicated
 `*_with_route` helpers and `custom_command` routing).
 
-## Command families
-Each family is an **extension trait** with a blanket impl:
+## Command surface
+
+**GLIDE's command API** is source-compatible with the fork: `glide::AsyncCommands` (async)
+and `glide::Commands` (blocking) are defined by a **hand-maintained command
+table** (`src/commands/core.rs`, one `implement_glide_commands!` macro
+invocation — the same declarative pattern the fork itself uses) mirroring the vendored
+fork's `implement_commands!` table, enforced by a signature-parity guard
+(`tools/verify_command_table.py`, run by `tests/it_parity_guard.rs`).
+Method names, generic parameter order, and
+wire encoding match the fork exactly (methods delegate to its own
+`Cmd::<name>()` constructors).
+
+Parity is a **command-surface** contract, not a connection-plumbing one.
+Deliberate deviations, all performance-motivated:
+- methods take `&self` (the clients are cheaply cloneable handles) and hand
+  the built command to glide-core **by value** via the `glide_send_owned`
+  required method — the native zero-extra-copy path;
+- the clients do **not** implement the `redis` crate's connection-object
+  traits (`ConnectionLike`): that interop hands commands over by reference,
+  which forced a full payload copy per command to bridge into glide-core's
+  owned dispatch. Raw commands go through the typed `glide_send` escape
+  hatch instead;
+- the `scan*` methods return GLIDE-owned iterators (`src/commands/scan.rs`,
+  same `next_item()` / `Iterator` call shape as redis-rs), each page
+  dispatched by value.
+
 ```rust
-#[async_trait]
-pub trait StringCommands: CommandExecutor {
-    async fn get<K: ToRedisArgs + Send>(&self, key: K) -> Result<Option<Bytes>> { .. }
-    async fn set<K: ToRedisArgs + Send, V: ToRedisArgs + Send>(&self, k: K, v: V) -> Result<()> { .. }
+pub trait AsyncCommands: Send + Sync + Sized {
+    fn glide_send_owned<'a>(&'a self, cmd: Cmd) -> RedisFuture<'a, Value>;
+    // typed escape hatch (replaces `cmd().query_async()`):
+    fn glide_send<'a, RV: FromRedisValue>(&'a self, cmd: Cmd) -> RedisFuture<'a, RV> { /* provided */ }
+    // + 151 table-defined methods with fork-exact signatures:
+    fn get<'a, K: ToRedisArgs + Send + Sync + 'a, RV: FromRedisValue>(
+        &'a self, key: K) -> RedisFuture<'a, RV> { /* Cmd::get -> glide_send_owned */ }
     // ...
 }
-impl<T: CommandExecutor + ?Sized> StringCommands for T {}
 ```
-Benefits: the async client, and any future executor (e.g. a routed handle), gets
-every command for free; families live in isolated files (parallel-friendly).
+
+Commands **beyond** that table live in GLIDE **extension traits**
+(`src/commands/`): streams, geo, Search (`FT.*`), JSON, Pub/Sub, scripting/
+functions, server & connection management, plus per-family extras (hash
+field-TTL, `LCS`, `SINTERCARD`, `ZRANGESTORE`, `BITFIELD`, `SORT`,
+`DUMP`/`RESTORE`, …). These keep rich concrete return types and never collide
+with unified-trait names, so both can be imported together.
 
 - **Arguments**: generic over `redis::ToRedisArgs` — accepts `&str`, `String`,
-  `&[u8]`, `Vec<u8>`, integers, floats, slices, etc. Mirrors Python `TEncodable`.
-- **Returns**: typed via `redis::FromRedisValue` plus small hand conversions
-  (e.g. `Option<Bytes>`, `HashMap<String,Bytes>`, `f64`, bool-from-int).
-- **Options**: dedicated structs/enums (`SetOptions`, `ExpirySet`, `ExpireOptions`,
-  `ScoreBound`, ...) each with an `add_to(&self, &mut Cmd)` method. Mirrors the
-  Python option classes.
+  `&[u8]`, `Vec<u8>`, integers, floats, slices, etc.
+- **Returns**: unified traits are generic over `redis::FromRedisValue`
+  (`let v: Option<String> = c.get(k).await?`); extension traits return
+  concrete typed results.
 
 ## Value conversion
 `value` module provides helpers: `Value -> Option<Bytes>`, `-> String`, `-> i64`,
@@ -79,7 +109,14 @@ and RESP3 maps/doubles/booleans (glide-core already converts many types).
 shared multi-thread `tokio::runtime::Runtime` (lazily created, process-wide), and
 expose the same methods with `block_on`. Mirrors Python `glide-sync`.
 
-## Batch / Transaction
-`Batch::new(is_atomic)` collects `Cmd`s into a `redis::Pipeline`; the client
-executes via `send_transaction` (atomic) or `send_pipeline` (non-atomic) and maps
-the returned `Value::Array` into `Vec<Value>`.
+## Pipelines / Transactions
+`redis::Pipeline` is used directly: build with `glide::pipe()` (add
+`.atomic()` for `MULTI`/`EXEC`), execute typed via `PipelineExt::query_glide`
+(async and, mirrored in `sync::PipelineExt`, blocking), or via
+`execute_pipeline(&Pipeline, raise_on_error, &PipelineOptions)` when GLIDE
+execution controls (per-call timeout, pipeline retry policy, cluster routing)
+are needed. `query_glide` hands the built `&Pipeline` to glide-core by
+reference (zero payload copies) and reuses the `redis` crate's typed decoding
+(`.ignore()` markers, transaction unwrapping) through a crate-private adapter.
+The client dispatches to glide-core's `send_transaction` (atomic) or
+`send_pipeline`.

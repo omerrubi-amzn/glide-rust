@@ -227,95 +227,6 @@ impl RestoreOptions {
     }
 }
 
-/// Options for updating elements of a sorted set with `ZADD` (or `GEOADD`).
-///
-/// Mirrors Python `UpdateOptions`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UpdateOptions {
-    /// Only update existing elements if the new score is less than the current
-    /// score (`LT`).
-    LessThan,
-    /// Only update existing elements if the new score is greater than the current
-    /// score (`GT`).
-    GreaterThan,
-}
-
-impl UpdateOptions {
-    pub(crate) fn as_arg(&self) -> &'static str {
-        match self {
-            UpdateOptions::LessThan => "LT",
-            UpdateOptions::GreaterThan => "GT",
-        }
-    }
-}
-
-/// Options for the `SET` command.
-///
-/// Mirrors the option surface of Python's `set(...)`.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct SetOptions {
-    /// Conditional set (`NX`/`XX`).
-    pub conditional_set: Option<ConditionalChange>,
-    /// Return the old value with `GET`.
-    pub return_old_value: bool,
-    /// Expiry to apply.
-    pub expiry: Option<ExpirySet>,
-}
-
-impl SetOptions {
-    pub(crate) fn add_to(&self, cmd: &mut Cmd) {
-        if let Some(c) = &self.conditional_set {
-            c.add_to(cmd);
-        }
-        if self.return_old_value {
-            cmd.arg("GET");
-        }
-        if let Some(e) = &self.expiry {
-            e.add_to(cmd);
-        }
-    }
-}
-
-/// Position for `LINSERT`.
-///
-/// Mirrors Python `InsertPosition`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InsertPosition {
-    /// Insert before the pivot.
-    Before,
-    /// Insert after the pivot.
-    After,
-}
-
-impl InsertPosition {
-    pub(crate) fn as_arg(&self) -> &'static str {
-        match self {
-            InsertPosition::Before => "BEFORE",
-            InsertPosition::After => "AFTER",
-        }
-    }
-}
-
-/// Direction for list move/pop commands.
-///
-/// Mirrors Python `ListDirection`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ListDirection {
-    /// The head of the list (`LEFT`).
-    Left,
-    /// The tail of the list (`RIGHT`).
-    Right,
-}
-
-impl ListDirection {
-    pub(crate) fn as_arg(&self) -> &'static str {
-        match self {
-            ListDirection::Left => "LEFT",
-            ListDirection::Right => "RIGHT",
-        }
-    }
-}
-
 /// Sort/scan ordering.
 ///
 /// Mirrors Python `OrderBy`.
@@ -367,17 +278,6 @@ pub enum ObjectType {
 }
 
 impl ObjectType {
-    pub(crate) fn as_arg(&self) -> &'static str {
-        match self {
-            ObjectType::String => "string",
-            ObjectType::List => "list",
-            ObjectType::Set => "set",
-            ObjectType::ZSet => "zset",
-            ObjectType::Hash => "hash",
-            ObjectType::Stream => "stream",
-        }
-    }
-
     /// Map to the vendored `redis` crate's `ObjectType` (used by cluster scan).
     pub(crate) fn to_redis(self) -> redis::ObjectType {
         match self {
@@ -472,34 +372,11 @@ mod tests {
     }
 
     #[test]
-    fn set_options_full_ordering() {
-        let opts = SetOptions {
-            conditional_set: Some(ConditionalChange::OnlyIfExists),
-            return_old_value: true,
-            expiry: Some(ExpirySet::Seconds(10)),
-        };
-        let mut cmd = Cmd::new();
-        opts.add_to(&mut cmd);
-        assert_eq!(args_of(&cmd), vec!["XX", "GET", "EX", "10"]);
-    }
-
-    #[test]
     fn simple_enum_args() {
-        assert_eq!(InsertPosition::Before.as_arg(), "BEFORE");
-        assert_eq!(InsertPosition::After.as_arg(), "AFTER");
-        assert_eq!(ListDirection::Left.as_arg(), "LEFT");
-        assert_eq!(ListDirection::Right.as_arg(), "RIGHT");
         assert_eq!(OrderBy::Asc.as_arg(), "ASC");
         assert_eq!(OrderBy::Desc.as_arg(), "DESC");
         assert_eq!(FlushMode::Sync.as_arg(), "SYNC");
         assert_eq!(FlushMode::Async.as_arg(), "ASYNC");
-        assert_eq!(ObjectType::ZSet.as_arg(), "zset");
-    }
-
-    #[test]
-    fn update_options_args() {
-        assert_eq!(UpdateOptions::LessThan.as_arg(), "LT");
-        assert_eq!(UpdateOptions::GreaterThan.as_arg(), "GT");
     }
 
     #[test]

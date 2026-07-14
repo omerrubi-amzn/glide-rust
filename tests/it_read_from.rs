@@ -9,15 +9,15 @@
 mod common;
 
 use glide::{
-    GlideClient, GlideClientConfiguration, GlideClusterClient, GlideClusterClientConfiguration,
-    ProtocolVersion, ReadFrom, StringCommands,
+    AsyncCommands, GlideClient, GlideClientConfiguration, GlideClusterClient,
+    GlideClusterClientConfiguration, ProtocolVersion, ReadFrom,
 };
 use std::time::Duration;
 
 /// Read the key with a short retry loop to tolerate replica replication lag.
 async fn get_with_retry(c: &GlideClusterClient, k: &str) -> Option<glide::Bytes> {
     for _ in 0..40 {
-        if let Ok(Some(v)) = c.get(k).await {
+        if let Ok(Some(v)) = c.get::<_, Option<glide::Bytes>>(k).await {
             return Some(v);
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -32,9 +32,10 @@ async fn standalone_roundtrip(read_from: ReadFrom, protocol: ProtocolVersion) {
         .protocol(protocol);
     let c = GlideClient::connect(cfg).await.expect("connect");
     let k = common::key("rf");
-    c.set(&k, "v").await.unwrap();
+    let _: () = c.set(&k, "v").await.unwrap();
     // With no replica, every strategy resolves to the primary → immediate read.
-    assert_eq!(c.get(&k).await.unwrap().as_deref(), Some(&b"v"[..]));
+    let got: Option<glide::Bytes> = c.get(&k).await.unwrap();
+    assert_eq!(got.as_deref(), Some(&b"v"[..]));
 }
 
 #[tokio::test]
@@ -68,7 +69,7 @@ async fn cluster_prefer_replica_reads_data() {
         .request_timeout(Duration::from_secs(5));
     let c = GlideClusterClient::connect(cfg).await.expect("connect");
     let k = common::key("rf_cluster");
-    c.set(&k, "replicated").await.unwrap();
+    let _: () = c.set(&k, "replicated").await.unwrap();
     assert_eq!(
         get_with_retry(&c, &k).await.as_deref(),
         Some(&b"replicated"[..])
@@ -85,7 +86,7 @@ async fn cluster_az_affinity_config_is_accepted() {
         .request_timeout(Duration::from_secs(5));
     let c = GlideClusterClient::connect(cfg).await.expect("connect");
     let k = common::key("rf_az");
-    c.set(&k, "v").await.unwrap();
+    let _: () = c.set(&k, "v").await.unwrap();
     assert_eq!(get_with_retry(&c, &k).await.as_deref(), Some(&b"v"[..]));
 }
 
@@ -98,6 +99,6 @@ async fn cluster_all_nodes_config_is_accepted() {
         .request_timeout(Duration::from_secs(5));
     let c = GlideClusterClient::connect(cfg).await.expect("connect");
     let k = common::key("rf_all");
-    c.set(&k, "v").await.unwrap();
+    let _: () = c.set(&k, "v").await.unwrap();
     assert_eq!(get_with_retry(&c, &k).await.as_deref(), Some(&b"v"[..]));
 }

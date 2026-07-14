@@ -4,15 +4,16 @@
 
 pub mod options;
 
+pub mod core;
+pub mod scan;
+
 pub mod bitmap;
 pub mod connection_management;
 pub mod ft;
 pub mod generic;
 pub mod geo;
 pub mod hash;
-pub mod hyperloglog;
 pub mod json;
-pub mod list;
 pub mod pubsub;
 pub mod scripting;
 pub mod server_management;
@@ -30,9 +31,7 @@ pub mod prelude {
     pub use super::generic::GenericCommands;
     pub use super::geo::GeoCommands;
     pub use super::hash::HashCommands;
-    pub use super::hyperloglog::HyperLogLogCommands;
     pub use super::json::JsonCommands;
-    pub use super::list::ListCommands;
     pub use super::pubsub::PubSubCommands;
     pub use super::scripting::ScriptingCommands;
     pub use super::server_management::ServerManagementCommands;

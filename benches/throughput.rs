@@ -8,7 +8,7 @@
 //! Run with: `cargo bench`. If no server binary is available the bench skips.
 
 use criterion::{BenchmarkId, Criterion, Throughput};
-use glide::{GlideClient, GlideClientConfiguration, StringCommands};
+use glide::{AsyncCommands, GlideClient, GlideClientConfiguration};
 use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -88,7 +88,7 @@ async fn throughput(client: Arc<GlideClient>, total: usize, concurrency: usize) 
         handles.push(tokio::spawn(async move {
             for i in 0..per_task {
                 let key = format!("thr:{t}:{}", i % 1000);
-                c.set(&key, "v").await.unwrap();
+                c.set::<_, _, ()>(&key, "v").await.unwrap();
             }
         }));
     }
@@ -119,7 +119,7 @@ fn main() {
     let client = Arc::new(client);
 
     // Seed a key for GET.
-    rt.block_on(async { client.set("bench:get", "value").await.unwrap() });
+    rt.block_on(async { client.set::<_, _, ()>("bench:get", "value").await.unwrap() });
 
     // ---- Manual throughput probe (concrete numbers, printed) ----
     println!("\n=== GLIDE Rust throughput (SET, pipelined via concurrency) ===");
@@ -142,7 +142,7 @@ fn main() {
         b.to_async(&rt).iter(|| {
             let c = client.clone();
             async move {
-                c.set("bench:set", "value").await.unwrap();
+                c.set::<_, _, ()>("bench:set", "value").await.unwrap();
             }
         })
     });
@@ -151,7 +151,7 @@ fn main() {
         b.to_async(&rt).iter(|| {
             let c = client.clone();
             async move {
-                let _ = c.get("bench:get").await.unwrap();
+                let _: Option<String> = c.get("bench:get").await.unwrap();
             }
         })
     });
@@ -160,7 +160,7 @@ fn main() {
         b.to_async(&rt).iter(|| {
             let c = client.clone();
             async move {
-                let _ = c.incr("bench:incr").await.unwrap();
+                let _: i64 = c.incr("bench:incr", 1).await.unwrap();
             }
         })
     });
@@ -177,7 +177,7 @@ fn main() {
                         for i in 0..conc {
                             let c = c.clone();
                             hs.push(tokio::spawn(async move {
-                                c.set(format!("bc:{i}"), "v").await.unwrap();
+                                c.set::<_, _, ()>(format!("bc:{i}"), "v").await.unwrap();
                             }));
                         }
                         for h in hs {

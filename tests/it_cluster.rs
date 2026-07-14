@@ -8,7 +8,7 @@
 
 mod common;
 
-use glide::{ConnectionManagementCommands, CustomCommand, GenericCommands, Route, StringCommands};
+use glide::{AsyncCommands, ConnectionManagementCommands, CustomCommand, Route};
 
 #[tokio::test]
 async fn cluster_set_get_routed_by_key() {
@@ -23,8 +23,9 @@ async fn cluster_set_get_routed_by_key() {
     // Keys hash to different slots; the client routes each automatically.
     for i in 0..50 {
         let k = format!("clusterkey:{i}");
-        client.set(&k, "v").await.unwrap();
-        assert_eq!(client.get(&k).await.unwrap().as_deref(), Some(&b"v"[..]));
+        let _: () = client.set(&k, "v").await.unwrap();
+        let got: Option<String> = client.get(&k).await.unwrap();
+        assert_eq!(got.as_deref(), Some("v"));
     }
 }
 
@@ -87,10 +88,13 @@ async fn cluster_del_and_exists() {
         }
     };
     let k = "cluster:delkey";
-    client.set(k, "v").await.unwrap();
-    assert_eq!(client.exists(&[k]).await.unwrap(), 1);
-    assert_eq!(client.del(&[k]).await.unwrap(), 1);
-    assert_eq!(client.exists(&[k]).await.unwrap(), 0);
+    let _: () = client.set(k, "v").await.unwrap();
+    let exists: i64 = client.exists(k).await.unwrap();
+    assert_eq!(exists, 1);
+    let deleted: i64 = client.del(k).await.unwrap();
+    assert_eq!(deleted, 1);
+    let exists: i64 = client.exists(k).await.unwrap();
+    assert_eq!(exists, 0);
 }
 
 #[tokio::test]
@@ -104,8 +108,10 @@ async fn cluster_incr() {
         }
     };
     let k = "cluster:counter";
-    assert_eq!(client.incr(k).await.unwrap(), 1);
-    assert_eq!(client.incr_by(k, 4).await.unwrap(), 5);
+    let v: i64 = client.incr(k, 1i64).await.unwrap();
+    assert_eq!(v, 1);
+    let v: i64 = client.incr(k, 4i64).await.unwrap();
+    assert_eq!(v, 5);
 }
 
 #[tokio::test]
@@ -119,11 +125,11 @@ async fn cluster_hashtag_same_slot() {
         }
     };
     // Hash tags force keys into the same slot, so a multi-key MSET/MGET works.
-    client.set("{tag}:a", "1").await.unwrap();
-    client.set("{tag}:b", "2").await.unwrap();
-    let got = client.mget(&["{tag}:a", "{tag}:b"]).await.unwrap();
-    assert_eq!(got[0].as_deref(), Some(&b"1"[..]));
-    assert_eq!(got[1].as_deref(), Some(&b"2"[..]));
+    let _: () = client.set("{tag}:a", "1").await.unwrap();
+    let _: () = client.set("{tag}:b", "2").await.unwrap();
+    let got: Vec<Option<String>> = client.mget(&["{tag}:a", "{tag}:b"]).await.unwrap();
+    assert_eq!(got[0].as_deref(), Some("1"));
+    assert_eq!(got[1].as_deref(), Some("2"));
 }
 
 #[tokio::test]

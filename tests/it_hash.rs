@@ -3,65 +3,96 @@
 
 mod common;
 
-use glide::commands::options::ExpireOptions;
-use glide::{HashCommands, ListCommands};
+use glide::AsyncCommands;
+use glide::HashCommands;
+use glide::commands::options::ExpireOptions; // surviving native extensions: hmget, hstrlen, hrandfield*, hexpire/httl/etc.
 
 matrix_test!(hset_hget, c, {
     let k = common::key("h");
-    assert_eq!(c.hset(&k, &[("f1", "v1"), ("f2", "v2")]).await.unwrap(), 2);
-    assert_eq!(c.hget(&k, "f1").await.unwrap().as_deref(), Some(&b"v1"[..]));
+    // HSET with multiple fields returns the count of NEW fields added.
+    // compat hset_multiple uses HMSET (returns OK), so use glide_send_owned for the count.
+    let mut cmd = redis::Cmd::new();
+    cmd.arg("HSET")
+        .arg(&k)
+        .arg("f1")
+        .arg("v1")
+        .arg("f2")
+        .arg("v2");
+    let n: i64 = redis::from_owned_redis_value(c.glide_send_owned(cmd).await.unwrap()).unwrap();
+    assert_eq!(n, 2);
+    let v: Option<String> = c.hget(&k, "f1").await.unwrap();
+    assert_eq!(v.as_deref(), Some("v1"));
 });
 
 matrix_test!(hget_missing_field, c, {
     let k = common::key("h");
-    c.hset(&k, &[("f", "v")]).await.unwrap();
-    assert_eq!(c.hget(&k, "nope").await.unwrap(), None);
+    let _: () = c.hset_multiple(&k, &[("f", "v")]).await.unwrap();
+    let v: Option<String> = c.hget(&k, "nope").await.unwrap();
+    assert_eq!(v, None);
 });
 
 matrix_test!(hget_missing_key, c, {
-    assert_eq!(c.hget(common::key("h"), "f").await.unwrap(), None);
+    let v: Option<String> = c.hget(common::key("h"), "f").await.unwrap();
+    assert_eq!(v, None);
 });
 
 matrix_test!(hset_updates_existing_returns_zero, c, {
     let k = common::key("h");
-    c.hset(&k, &[("f", "v1")]).await.unwrap();
-    // Updating an existing field returns 0 new fields.
-    assert_eq!(c.hset(&k, &[("f", "v2")]).await.unwrap(), 0);
-    assert_eq!(c.hget(&k, "f").await.unwrap().as_deref(), Some(&b"v2"[..]));
+    let _: () = c.hset_multiple(&k, &[("f", "v1")]).await.unwrap();
+    // Updating an existing field returns 0 new fields via HSET.
+    let mut cmd = redis::Cmd::new();
+    cmd.arg("HSET").arg(&k).arg("f").arg("v2");
+    let n: i64 = redis::from_owned_redis_value(c.glide_send_owned(cmd).await.unwrap()).unwrap();
+    assert_eq!(n, 0);
+    let v: Option<String> = c.hget(&k, "f").await.unwrap();
+    assert_eq!(v.as_deref(), Some("v2"));
 });
 
 matrix_test!(hsetnx, c, {
     let k = common::key("h");
-    assert!(c.hsetnx(&k, "f", "v1").await.unwrap());
-    assert!(!c.hsetnx(&k, "f", "v2").await.unwrap());
-    assert_eq!(c.hget(&k, "f").await.unwrap().as_deref(), Some(&b"v1"[..]));
+    let ok: bool = c.hset_nx(&k, "f", "v1").await.unwrap();
+    assert!(ok);
+    let ok: bool = c.hset_nx(&k, "f", "v2").await.unwrap();
+    assert!(!ok);
+    let v: Option<String> = c.hget(&k, "f").await.unwrap();
+    assert_eq!(v.as_deref(), Some("v1"));
 });
 
 matrix_test!(hdel, c, {
     let k = common::key("h");
-    c.hset(&k, &[("a", "1"), ("b", "2"), ("d", "3")])
+    let _: () = c
+        .hset_multiple(&k, &[("a", "1"), ("b", "2"), ("d", "3")])
         .await
         .unwrap();
-    assert_eq!(c.hdel(&k, &["a", "b", "missing"]).await.unwrap(), 2);
-    assert_eq!(c.hlen(&k).await.unwrap(), 1);
+    let n: i64 = c.hdel(&k, &["a", "b", "missing"]).await.unwrap();
+    assert_eq!(n, 2);
+    let len: i64 = c.hlen(&k).await.unwrap();
+    assert_eq!(len, 1);
 });
 
 matrix_test!(hgetall, c, {
     let k = common::key("h");
-    c.hset(&k, &[("f1", "v1"), ("f2", "v2")]).await.unwrap();
-    let all = c.hgetall(&k).await.unwrap();
+    let _: () = c
+        .hset_multiple(&k, &[("f1", "v1"), ("f2", "v2")])
+        .await
+        .unwrap();
+    let all: std::collections::HashMap<String, String> = c.hgetall(&k).await.unwrap();
     assert_eq!(all.len(), 2);
-    assert_eq!(all.get("f1").map(|b| b.as_ref()), Some(&b"v1"[..]));
-    assert_eq!(all.get("f2").map(|b| b.as_ref()), Some(&b"v2"[..]));
+    assert_eq!(all.get("f1").map(|s| s.as_str()), Some("v1"));
+    assert_eq!(all.get("f2").map(|s| s.as_str()), Some("v2"));
 });
 
 matrix_test!(hgetall_missing_is_empty, c, {
-    assert!(c.hgetall(common::key("h")).await.unwrap().is_empty());
+    let all: std::collections::HashMap<String, String> = c.hgetall(common::key("h")).await.unwrap();
+    assert!(all.is_empty());
 });
 
 matrix_test!(hmget, c, {
     let k = common::key("h");
-    c.hset(&k, &[("f1", "v1"), ("f2", "v2")]).await.unwrap();
+    let _: () = c
+        .hset_multiple(&k, &[("f1", "v1"), ("f2", "v2")])
+        .await
+        .unwrap();
     let vals = c.hmget(&k, &["f1", "missing", "f2"]).await.unwrap();
     assert_eq!(vals[0].as_deref(), Some(&b"v1"[..]));
     assert_eq!(vals[1], None);
@@ -70,63 +101,63 @@ matrix_test!(hmget, c, {
 
 matrix_test!(hexists, c, {
     let k = common::key("h");
-    c.hset(&k, &[("f", "v")]).await.unwrap();
-    assert!(c.hexists(&k, "f").await.unwrap());
-    assert!(!c.hexists(&k, "nope").await.unwrap());
+    let _: () = c.hset_multiple(&k, &[("f", "v")]).await.unwrap();
+    let exists: bool = c.hexists(&k, "f").await.unwrap();
+    assert!(exists);
+    let exists: bool = c.hexists(&k, "nope").await.unwrap();
+    assert!(!exists);
 });
 
 matrix_test!(hlen, c, {
     let k = common::key("h");
-    assert_eq!(c.hlen(&k).await.unwrap(), 0);
-    c.hset(&k, &[("a", "1"), ("b", "2")]).await.unwrap();
-    assert_eq!(c.hlen(&k).await.unwrap(), 2);
+    let len: i64 = c.hlen(&k).await.unwrap();
+    assert_eq!(len, 0);
+    let _: () = c
+        .hset_multiple(&k, &[("a", "1"), ("b", "2")])
+        .await
+        .unwrap();
+    let len: i64 = c.hlen(&k).await.unwrap();
+    assert_eq!(len, 2);
 });
 
 matrix_test!(hkeys_hvals, c, {
     let k = common::key("h");
-    c.hset(&k, &[("f1", "v1"), ("f2", "v2")]).await.unwrap();
-    let mut keys: Vec<_> = c
-        .hkeys(&k)
+    let _: () = c
+        .hset_multiple(&k, &[("f1", "v1"), ("f2", "v2")])
         .await
-        .unwrap()
-        .iter()
-        .map(|b| b.to_vec())
-        .collect();
+        .unwrap();
+    let mut keys: Vec<String> = c.hkeys(&k).await.unwrap();
     keys.sort();
-    assert_eq!(keys, vec![b"f1".to_vec(), b"f2".to_vec()]);
-    let mut vals: Vec<_> = c
-        .hvals(&k)
-        .await
-        .unwrap()
-        .iter()
-        .map(|b| b.to_vec())
-        .collect();
+    assert_eq!(keys, vec!["f1".to_string(), "f2".to_string()]);
+    let mut vals: Vec<String> = c.hvals(&k).await.unwrap();
     vals.sort();
-    assert_eq!(vals, vec![b"v1".to_vec(), b"v2".to_vec()]);
+    assert_eq!(vals, vec!["v1".to_string(), "v2".to_string()]);
 });
 
 matrix_test!(hincr_by, c, {
     let k = common::key("h");
-    assert_eq!(c.hincr_by(&k, "n", 5).await.unwrap(), 5);
-    assert_eq!(c.hincr_by(&k, "n", -2).await.unwrap(), 3);
+    let n: i64 = c.hincr(&k, "n", 5i64).await.unwrap();
+    assert_eq!(n, 5);
+    let n: i64 = c.hincr(&k, "n", -2i64).await.unwrap();
+    assert_eq!(n, 3);
 });
 
 matrix_test!(hincr_by_float, c, {
     let k = common::key("h");
-    let v = c.hincr_by_float(&k, "n", 1.5).await.unwrap();
+    let v: f64 = c.hincr(&k, "n", 1.5f64).await.unwrap();
     assert!((v - 1.5).abs() < 1e-9);
 });
 
 matrix_test!(hstrlen, c, {
     let k = common::key("h");
-    c.hset(&k, &[("f", "hello")]).await.unwrap();
+    let _: () = c.hset_multiple(&k, &[("f", "hello")]).await.unwrap();
     assert_eq!(c.hstrlen(&k, "f").await.unwrap(), 5);
     assert_eq!(c.hstrlen(&k, "missing").await.unwrap(), 0);
 });
 
 matrix_test!(hrandfield, c, {
     let k = common::key("h");
-    c.hset(&k, &[("only", "v")]).await.unwrap();
+    let _: () = c.hset_multiple(&k, &[("only", "v")]).await.unwrap();
     assert_eq!(
         c.hrandfield(&k).await.unwrap().as_deref(),
         Some(&b"only"[..])
@@ -137,7 +168,8 @@ matrix_test!(hrandfield, c, {
 
 matrix_test!(hrandfield_count, c, {
     let k = common::key("h");
-    c.hset(&k, &[("a", "1"), ("b", "2"), ("d", "3")])
+    let _: () = c
+        .hset_multiple(&k, &[("a", "1"), ("b", "2"), ("d", "3")])
         .await
         .unwrap();
     let fields = c.hrandfield_count(&k, 2).await.unwrap();
@@ -146,22 +178,23 @@ matrix_test!(hrandfield_count, c, {
 
 matrix_test!(hset_wrong_type_errors, c, {
     let k = common::key("wt");
-    c.rpush(&k, &["x"]).await.unwrap();
-    assert_request_error!(c.hget(&k, "f").await);
+    let _: i64 = c.rpush(&k, &["x"]).await.unwrap();
+    let result: redis::RedisResult<Option<String>> = c.hget(&k, "f").await;
+    assert!(result.is_err());
 });
 
 // ---------------------------------------------------------------------------
-// Hash-field TTL (Valkey/Redis 7.4+). Version-gated so CI against older servers
 // Hash-field TTL (Valkey/Redis 7.4+). Gated on the server actually supporting
-// HEXPIRE (via COMMAND INFO) rather than a version number, because Valkey pins
-// its advertised redis_version to 7.2.4 on all releases — mirrors the intent of
-// Python's @skip_if_version_below("7.4.0") but is robust across Redis/Valkey.
+// HEXPIRE (via COMMAND INFO) rather than a version number.
 // ---------------------------------------------------------------------------
 
 matrix_test!(hexpire_and_httl, c, {
     skip_unless_command!(c, "HEXPIRE");
     let k = common::key("h_ttl");
-    c.hset(&k, &[("f1", "v1"), ("f2", "v2")]).await.unwrap();
+    let _: () = c
+        .hset_multiple(&k, &[("f1", "v1"), ("f2", "v2")])
+        .await
+        .unwrap();
     // Set a 100s TTL on f1 only.
     let res = c.hexpire(&k, 100, &["f1"], None).await.unwrap();
     assert_eq!(res, vec![1]); // 1 = expiry set
@@ -175,7 +208,7 @@ matrix_test!(hexpire_and_httl, c, {
 matrix_test!(hexpire_conditions, c, {
     skip_unless_command!(c, "HEXPIRE");
     let k = common::key("h_ttlc");
-    c.hset(&k, &[("f", "v")]).await.unwrap();
+    let _: () = c.hset_multiple(&k, &[("f", "v")]).await.unwrap();
     // NX: set only when no TTL exists -> succeeds.
     assert_eq!(
         c.hexpire(&k, 100, &["f"], Some(ExpireOptions::HasNoExpiry))
@@ -202,7 +235,7 @@ matrix_test!(hexpire_conditions, c, {
 matrix_test!(hpexpire_and_hpttl, c, {
     skip_unless_command!(c, "HEXPIRE");
     let k = common::key("h_pttl");
-    c.hset(&k, &[("f", "v")]).await.unwrap();
+    let _: () = c.hset_multiple(&k, &[("f", "v")]).await.unwrap();
     assert_eq!(
         c.hpexpire(&k, 100_000, &["f"], None).await.unwrap(),
         vec![1]
@@ -214,7 +247,7 @@ matrix_test!(hpexpire_and_hpttl, c, {
 matrix_test!(hexpiretime_absolute, c, {
     skip_unless_command!(c, "HEXPIRE");
     let k = common::key("h_et");
-    c.hset(&k, &[("f", "v")]).await.unwrap();
+    let _: () = c.hset_multiple(&k, &[("f", "v")]).await.unwrap();
     let future = 4_102_444_800; // year 2100 (seconds)
     assert_eq!(
         c.hexpireat(&k, future, &["f"], None).await.unwrap(),

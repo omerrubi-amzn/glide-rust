@@ -8,7 +8,7 @@ mod common;
 
 use common::TestServer;
 use glide::{
-    ConnectionManagementCommands, GlideClientConfiguration, ServerCredentials, StringCommands,
+    AsyncCommands, ConnectionManagementCommands, GlideClientConfiguration, ServerCredentials,
 };
 
 const PASSWORD: &str = "s3cr3t-p4ss";
@@ -30,8 +30,9 @@ async fn auth_success_with_correct_password() {
         .credentials(ServerCredentials::password(PASSWORD));
     let client = srv.try_connect(config).await.expect("auth should succeed");
     assert_eq!(client.ping().await.unwrap(), "PONG");
-    client.set("k", "v").await.unwrap();
-    assert_eq!(client.get("k").await.unwrap().as_deref(), Some(&b"v"[..]));
+    let _: () = client.set("k", "v").await.unwrap();
+    let got: Option<glide::Bytes> = client.get("k").await.unwrap();
+    assert_eq!(got.as_deref(), Some(&b"v"[..]));
 }
 
 #[tokio::test]
