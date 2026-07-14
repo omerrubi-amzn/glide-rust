@@ -96,6 +96,45 @@ impl AggregationType {
 /// Sorted-set commands (`ZADD`, `ZRANGE`, `ZSCORE`, ...).
 #[async_trait]
 pub trait SortedSetCommands: CommandExecutor {
+    /// Increment the score of `member` by `increment` (`ZADD ... INCR`).
+    async fn zadd_incr<K: ToRedisArgs + Send, M: ToRedisArgs + Send>(
+        &self,
+        key: K,
+        member: M,
+        increment: f64,
+    ) -> Result<Option<f64>> {
+        let mut cmd = Cmd::new();
+        cmd.arg("ZADD")
+            .arg(key)
+            .arg("INCR")
+            .arg(increment)
+            .arg(member);
+        value::to_opt_f64(self.execute_command(cmd, None).await?)
+    }
+
+    /// Get the rank of `member` with its score, low to high (`ZRANK ... WITHSCORE`).
+    async fn zrank_withscore<K: ToRedisArgs + Send, M: ToRedisArgs + Send>(
+        &self,
+        key: K,
+        member: M,
+    ) -> Result<Option<(i64, f64)>> {
+        let mut cmd = Cmd::new();
+        cmd.arg("ZRANK").arg(key).arg(member).arg("WITHSCORE");
+        parse_rank_withscore(self.execute_command(cmd, None).await?)
+    }
+
+    /// Get the rank of `member` with its score, high to low
+    /// (`ZREVRANK ... WITHSCORE`).
+    async fn zrevrank_withscore<K: ToRedisArgs + Send, M: ToRedisArgs + Send>(
+        &self,
+        key: K,
+        member: M,
+    ) -> Result<Option<(i64, f64)>> {
+        let mut cmd = Cmd::new();
+        cmd.arg("ZREVRANK").arg(key).arg(member).arg("WITHSCORE");
+        parse_rank_withscore(self.execute_command(cmd, None).await?)
+    }
+
     #[doc(hidden)]
     async fn bzpop<K: ToRedisArgs + Send + Sync>(
         &self,
@@ -412,6 +451,21 @@ fn collect_member_scores(v: redis::Value) -> Result<Vec<(Bytes, f64)>> {
 }
 
 impl<T: CommandExecutor + ?Sized> SortedSetCommands for T {}
+
+/// Parse a `ZRANK ... WITHSCORE` reply (`[rank, score]` or nil).
+fn parse_rank_withscore(v: redis::Value) -> Result<Option<(i64, f64)>> {
+    match v {
+        redis::Value::Nil => Ok(None),
+        redis::Value::Array(mut items) if items.len() == 2 => {
+            let score = value::to_f64(items.pop().unwrap())?;
+            let rank = value::to_i64(items.pop().unwrap())?;
+            Ok(Some((rank, score)))
+        }
+        other => Err(crate::error::GlideError::Request(format!(
+            "unexpected ZRANK WITHSCORE reply: {other:?}"
+        ))),
+    }
+}
 
 #[cfg(test)]
 mod tests {

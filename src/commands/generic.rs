@@ -1,7 +1,7 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
 //! Generic (key) commands. Mirrors Python's generic command surface.
 
-use crate::commands::options::{Limit, MigrateOptions, OrderBy, RestoreOptions};
+use crate::commands::options::{Limit, MigrateOptions, ObjectType, OrderBy, RestoreOptions};
 use crate::error::Result;
 use crate::executor::CommandExecutor;
 use crate::value;
@@ -12,6 +12,33 @@ use redis::{Cmd, ToRedisArgs};
 /// Generic key-space commands (`DEL`, `EXISTS`, `EXPIRE`, `TTL`, `RENAME`, ...).
 #[async_trait]
 pub trait GenericCommands: CommandExecutor {
+    /// Iterate the keyspace with `SCAN`, with `MATCH`/`COUNT`/`TYPE` options
+    /// (cursor-style). Returns `(cursor, keys)`; a returned cursor of `"0"`
+    /// indicates iteration is complete. For simple iteration prefer the
+    /// unified [`crate::AsyncCommands::scan_match`] iterator.
+    /// A returned cursor of `"0"` indicates iteration is complete.
+    async fn scan_cursor(
+        &self,
+        cursor: &str,
+        pattern: Option<&[u8]>,
+        count: Option<i64>,
+        type_filter: Option<ObjectType>,
+    ) -> Result<(String, Vec<Bytes>)> {
+        let mut cmd = Cmd::new();
+        cmd.arg("SCAN").arg(cursor);
+        if let Some(p) = pattern {
+            cmd.arg("MATCH").arg(p);
+        }
+        if let Some(c) = count {
+            cmd.arg("COUNT").arg(c);
+        }
+        if let Some(t) = type_filter {
+            cmd.arg("TYPE").arg(t.to_redis().to_string().to_lowercase());
+        }
+        let reply = self.execute_command(cmd, None).await?;
+        parse_scan_reply(reply)
+    }
+
     /// Get the absolute expiry Unix time in seconds (`EXPIRETIME`).
     async fn expiretime<K: ToRedisArgs + Send>(&self, key: K) -> Result<i64> {
         let mut cmd = Cmd::new();
@@ -254,3 +281,17 @@ pub(crate) fn parse_scan_reply(reply: redis::Value) -> Result<(String, Vec<Bytes
 }
 
 impl<T: CommandExecutor + ?Sized> GenericCommands for T {}
+
+#[cfg(test)]
+mod scan_arg_probe {
+    #[test]
+    fn scan_type_arg_encoding() {
+        // strum's Display renders the variant name ("ZSet"); the wire arg
+        // must be the lowercase type name the server expects.
+        let s = crate::commands::options::ObjectType::ZSet
+            .to_redis()
+            .to_string()
+            .to_lowercase();
+        assert_eq!(s, "zset");
+    }
+}
