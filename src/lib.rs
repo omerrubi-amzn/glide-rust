@@ -60,12 +60,12 @@ pub use commands::stream::{
 /// Re-export the underlying `redis` value type for advanced use.
 pub use redis::Value;
 
-// ---- redis-rs API parity re-exports ----
+// ---- `redis` crate re-exports ----
 //
 // `GlideClient` / `GlideClusterClient` implement `redis::aio::ConnectionLike`,
-// so the full redis-rs typed API works on them directly. Downstream crates
+// so the full `redis` typed API works on them directly. Downstream crates
 // depend on `glide-rust` only — the vendored `redis` fork is a transitive git
-// dependency they cannot name — so re-export everything a redis-rs codebase
+// dependency they cannot name — so re-export everything a migrating codebase
 // needs:
 //
 // ```rust,no_run
@@ -78,13 +78,11 @@ pub use redis::Value;
 // # Ok(()) }
 // ```
 
-/// GLIDE's async command API. Signatures are source-compatible with
-/// redis-rs's `AsyncCommands` for easy migration; commands travel GLIDE's
-/// native zero-extra-copy path. The vendored fork's own trait remains
-/// available at [`redis::AsyncCommands`] for generic code bounded on it.
+/// GLIDE's async command API (source-compatible with the redis-rs fork,
+/// v0.25.2 — see `commands::core`). Commands travel GLIDE's native
+/// zero-extra-copy path.
 pub use commands::core::AsyncCommands;
-/// GLIDE's blocking command API (see [`AsyncCommands`]). The vendored
-/// fork's own trait remains at [`redis::Commands`].
+/// GLIDE's blocking command API (see [`AsyncCommands`]).
 #[cfg(feature = "sync")]
 pub use commands::core::Commands;
 /// The **whole vendored `redis` crate**, re-exported. Downstream crates cannot
@@ -101,17 +99,17 @@ pub use commands::core::Commands;
 /// **Semver note:** this makes the fork's API part of this crate's public
 /// surface — bumping the pinned fork rev is a breaking change.
 pub use redis;
-/// redis-rs connection-description types, accepted by
+/// Connection-description types, accepted by
 /// [`GlideClientConfiguration::from_connection_info`] and
 /// [`GlideClusterClientConfiguration::from_urls`].
 pub use redis::{ConnectionAddr, ConnectionInfo, IntoConnectionInfo};
-/// Argument types appearing in redis-rs command signatures (`lmpop`, `lpos`, …).
+/// Argument types appearing in command signatures (`lmpop`, `lpos`, …).
 pub use redis::{Direction, LposOptions};
-/// redis-rs error and conversion types, for code ported from redis-rs.
+/// Error and conversion types (`RedisResult`, `FromRedisValue`, …).
 pub use redis::{ErrorKind, FromRedisValue, RedisError, RedisResult, ToRedisArgs, cmd};
-/// redis-rs pipeline / transaction support (`pipe()`, `Pipeline::query_async`).
+/// Pipeline / transaction support (`pipe()`, `Pipeline::query_async`).
 pub use redis::{Pipeline, pipe};
-/// Lua script helper with the redis-rs `Script` API shape (clean-room impl).
+/// Lua script helper (`Script` — SHA-caching `EVALSHA` with `EVAL` fallback).
 pub use script::{Script, ScriptInvocation};
 
 /// Re-export `bytes::Bytes` — the byte-string type returned by binary-safe commands.

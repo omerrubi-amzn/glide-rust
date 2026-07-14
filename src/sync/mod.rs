@@ -90,7 +90,7 @@ impl SyncGlideClient {
         runtime().block_on(self.inner.custom_command(args))
     }
 
-    /// Execute a redis-rs [`redis::Pipeline`] with GLIDE execution options
+    /// Execute a [`redis::Pipeline`] with GLIDE execution options
     /// (blocking). See [`crate::GlideClient::execute_pipeline`]; for plain
     /// typed execution prefer [`PipelineExt::query_glide`].
     pub fn execute_pipeline(
@@ -165,7 +165,7 @@ impl SyncGlideClusterClient {
         )
     }
 
-    /// Execute a redis-rs [`redis::Pipeline`] with GLIDE execution options,
+    /// Execute a [`redis::Pipeline`] with GLIDE execution options,
     /// optionally routed (blocking). See
     /// [`crate::GlideClusterClient::execute_pipeline`].
     pub fn execute_pipeline(
@@ -187,14 +187,14 @@ impl SyncGlideClusterClient {
     }
 }
 
-// ---- redis-rs sync API compatibility -----------------------------------------
+// ---- blocking `redis` trait interop -------------------------------------------
 //
 // The fork blanket-implements the blocking typed API over the sync trait:
 //
 //     impl<T> Commands for T where T: ConnectionLike {}
 //
 // so implementing `redis::ConnectionLike` here makes `SyncGlideClient` /
-// `SyncGlideClusterClient` first-class blocking redis-rs connection objects
+// `SyncGlideClusterClient` first-class blocking `redis` connection objects
 // (`use glide::Commands;`), mirroring what the async clients do with
 // `redis::aio::ConnectionLike`.
 //
@@ -429,11 +429,11 @@ impl_sync_owned_send!(SyncGlideClusterClient);
 // client, so a blocking pipeline copies the payload exactly as many times as
 // the native `Batch` API. Drop-in shape: `.query(&mut c)` -> `.query_glide(&c)`.
 
-/// A blocking GLIDE client that can run a redis-rs [`redis::Pipeline`] with
+/// A blocking GLIDE client that can run a [`redis::Pipeline`] with
 /// **native copy behavior**. Sealed — implemented only by
 /// [`SyncGlideClient`] and [`SyncGlideClusterClient`].
 pub trait SyncPipelineTarget: sealed::Sealed {
-    /// The wrapped async connection type (a redis-rs async connection object).
+    /// The wrapped async connection type.
     #[doc(hidden)]
     type Async: redis::aio::ConnectionLike;
     /// A cheap clone of the wrapped async client (Arc inside).
@@ -461,7 +461,7 @@ impl SyncPipelineTarget for SyncGlideClusterClient {
     }
 }
 
-/// Extension for running a redis-rs [`redis::Pipeline`] on a blocking GLIDE
+/// Extension for running a [`redis::Pipeline`] on a blocking GLIDE
 /// client with **native copy behavior** (no packed-byte round-trip).
 ///
 /// Like the rest of the sync layer, this blocks on the internal runtime and

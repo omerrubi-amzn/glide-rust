@@ -496,7 +496,7 @@ impl GlideClientConfiguration {
     }
 
     /// Build a configuration from a Redis connection URL, using the exact URL
-    /// semantics of redis-rs (`redis://` and `rediss://`, with
+    /// semantics of the vendored fork (`redis://` and `rediss://`, with
     /// `[user][:password@]host[:port][/db]`):
     ///
     /// ```
@@ -507,13 +507,13 @@ impl GlideClientConfiguration {
     ///
     /// `rediss://` enables TLS with full verification;
     /// `rediss://…/#insecure` disables certificate verification, as in
-    /// redis-rs. Unix-socket URLs are not supported by glide-core and return
+    /// the fork. Unix-socket URLs are not supported by glide-core and return
     /// a configuration error.
     pub fn from_url(url: &str) -> crate::error::Result<Self> {
         Self::from_connection_info(url)
     }
 
-    /// Build a configuration from anything implementing redis-rs's
+    /// Build a configuration from anything implementing
     /// [`redis::IntoConnectionInfo`] (a URL string, or a prebuilt
     /// [`redis::ConnectionInfo`]).
     pub fn from_connection_info<T: redis::IntoConnectionInfo>(
@@ -706,7 +706,7 @@ pub struct GlideClusterClientConfiguration {
 
 impl GlideClusterClientConfiguration {
     /// Build a cluster configuration from one or more Redis connection URLs
-    /// (seed nodes), using the exact URL semantics of redis-rs
+    /// (seed nodes), using the fork's exact URL semantics
     /// (`ClusterClient::new(initial_nodes)` accepts the same URLs):
     ///
     /// ```
@@ -720,7 +720,7 @@ impl GlideClusterClientConfiguration {
     ///
     /// Credentials / client-name / database / TLS mode must be identical
     /// across all URLs — conflicting settings are rejected with a
-    /// configuration error, as in redis-rs's `ClusterClient`. A URL selecting
+    /// configuration error (matching the fork's `ClusterClient`). A URL selecting
     /// a non-zero database is rejected — clusters only support database 0.
     /// The RESP `protocol` is taken from the **first** URL and not
     /// cross-validated (matching the fork, which overwrites per-node protocol
@@ -935,7 +935,7 @@ impl GlideClusterClientConfiguration {
     }
 }
 
-/// Map a redis-rs [`redis::ConnectionAddr`] to our address + TLS mode.
+/// Map a [`redis::ConnectionAddr`] to our address + TLS mode.
 fn split_connection_addr(
     addr: redis::ConnectionAddr,
 ) -> crate::error::Result<(NodeAddress, TlsConfig)> {
@@ -975,7 +975,7 @@ fn split_connection_addr(
     }
 }
 
-/// Map redis-rs's protocol enum to ours.
+/// Map the fork's protocol enum to ours.
 fn from_redis_protocol(p: redis::ProtocolVersion) -> ProtocolVersion {
     match p {
         redis::ProtocolVersion::RESP2 => ProtocolVersion::RESP2,

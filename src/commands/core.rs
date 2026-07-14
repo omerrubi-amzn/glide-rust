@@ -2,23 +2,22 @@
 //! GLIDE's command API: [`AsyncCommands`] and [`Commands`].
 //!
 //! One command table (below) defines both traits via the
-//! `implement_glide_commands!` macro. Entries mirror the vendored redis-rs fork's
-//! command surface — same method names, generic parameter order, and argument
-//! lists, so redis-rs call sites (including turbofish annotations) compile
-//! unchanged — and every method delegates to the fork's `Cmd::<name>()`
-//! constructor, so the wire encoding is identical by construction. Signature
-//! parity with the fork is enforced by `tests/it_parity_guard.rs`.
+//! `implement_glide_commands!` macro. Entries are source-compatible with the
+//! vendored redis-rs fork (v0.25.2, predating the upstream license change):
+//! same method names, generic parameter order, and argument lists, so
+//! migrated call sites (including turbofish annotations) compile unchanged.
+//! Every method delegates to the fork's `Cmd::<name>()` constructor, so the
+//! wire encoding is identical by construction; signature parity is enforced
+//! by `tests/it_parity_guard.rs`.
 //!
-//! Unlike the fork's `ConnectionLike` dispatch (which takes `&Cmd` and forces
-//! a deep clone per call), the built command is handed to glide-core **by
-//! value** through [`AsyncCommands::glide_send_owned`] — the same
-//! zero-extra-copy path as the rest of the client. Methods take `&self`
-//! (the clients are cheaply cloneable handles); this is deliberately more
-//! permissive than redis-rs's `&mut self` and existing call sites still
-//! compile via auto-borrow.
+//! The built command is handed to glide-core **by value** through
+//! [`AsyncCommands::glide_send_owned`] — the same zero-extra-copy path as the
+//! rest of the client. Methods take `&self` (the clients are cheaply
+//! cloneable handles); migrated `&mut` call sites still compile via
+//! auto-borrow.
 //!
-//! Commands beyond redis-rs's surface (streams, geo, `FT.*`, `JSON.*`, …)
-//! live in the per-family extension traits in [`crate::commands`].
+//! Commands beyond this table (streams, geo, `FT.*`, `JSON.*`, …) live in
+//! the per-family extension traits in [`crate::commands`].
 //!
 //! Maintenance: add or adjust entries in the `implement_glide_commands!`
 //! invocation at the bottom of this file; the parity-guard test will flag any
@@ -48,9 +47,7 @@ macro_rules! implement_glide_commands {
         /// **GLIDE's async command API.**
         ///
         /// Implemented by [`crate::GlideClient`] and
-        /// [`crate::GlideClusterClient`]. Method signatures are
-        /// source-compatible with redis-rs for easy migration — see the
-        /// [module docs](self).
+        /// [`crate::GlideClusterClient`] — see the [module docs](self).
         pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sync + Sized {
             /// Send an already-built command **by value** (no clone). This is
             /// the single required method; every typed command delegates to

@@ -1,8 +1,8 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
-//! Lua script helper with the redis-rs `Script` API shape.
+//! Lua script helper (`Script`): SHA-caching `EVALSHA` with `EVAL` fallback.
 //!
-//! A clean-room implementation of the `redis::Script` convenience type
-//! (removed from the vendored fork), provided for redis-rs migration parity:
+//! A clean-room implementation of the `Script` convenience type (absent from
+//! the vendored fork), provided for migration parity:
 //!
 //! ```rust,no_run
 //! use glide::Script;
@@ -13,7 +13,7 @@
 //! # Ok(()) }
 //! ```
 //!
-//! Semantics match redis-rs: `invoke_async` / `invoke` first attempt `EVALSHA`
+//! `invoke_async` / `invoke` first attempt `EVALSHA`
 //! (cheap, cached) and transparently fall back to `EVAL` (which also loads the
 //! script) when the server does not know the hash (`NOSCRIPT`); `load_async` /
 //! `load` populate the script cache explicitly. Async methods work with any
@@ -24,7 +24,7 @@
 use crate::commands::core::AsyncCommands;
 use redis::{ErrorKind, FromRedisValue, RedisResult, ToRedisArgs, cmd};
 
-/// A cached Lua script with its SHA-1 hash, mirroring redis-rs's `Script`.
+/// A cached Lua script with its SHA-1 hash.
 ///
 /// Create once (computes the SHA-1), then [`Self::arg`]/[`Self::key`] to build
 /// an invocation. See the [module docs](self) for an example.

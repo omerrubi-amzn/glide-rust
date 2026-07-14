@@ -1,36 +1,36 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
-//! [`redis::aio::ConnectionLike`] implementations for the GLIDE clients.
+//! The GLIDE clients as `redis` crate connection objects.
 //!
-//! GLIDE's own command API lives in [`crate::commands`]; these impls
-//! additionally let the clients be used anywhere a redis-rs connection object
-//! is expected — `Pipeline::query_async`, the scan iterators, raw
+//! GLIDE's own command API lives in [`crate::commands`]; the
+//! [`redis::aio::ConnectionLike`] impls here additionally let the clients be
+//! used anywhere a `redis` connection object is expected — `Pipeline::query_async`, the scan iterators, raw
 //! `cmd().query_async()`, and generic code bounded on the vendored fork's
-//! traits (`glide::redis::AsyncCommands`) — easing migration from redis-rs.
+//! traits (`glide::redis::AsyncCommands`).
 
 use super::{GlideClient, GlideClusterClient};
 use glide_core::client::Client as CoreClient;
 use redis::{Cmd, Value};
 
 //
-// The vendored redis-rs fork blanket-implements its entire typed API over
+// The vendored fork blanket-implements its entire typed API over
 // `redis::aio::ConnectionLike`:
 //
 //     impl<T> AsyncCommands for T where T: crate::aio::ConnectionLike + Send + Sized {}
 //
 // Implementing that trait directly on our clients makes them **first-class
-// redis-rs connection objects**: `redis::AsyncCommands` (every typed method,
+// `redis` connection objects**: `redis::AsyncCommands` (every typed method,
 // generic over `RV: FromRedisValue`, returning `RedisResult<RV>`),
 // `Pipeline::query_async` (pipelined and MULTI/EXEC atomic), and the `scan*`
 // async iterators all work on `GlideClient` / `GlideClusterClient` as-is —
 // while every request is still executed by glide-core (multiplexing, cluster
 // routing, reconnection, IAM/password refresh, timeouts).
 //
-// Note: our native command traits (`StringCommands`, ...) and redis-rs's
+// Note: GLIDE's extension traits and the fork's
 // `AsyncCommands` share method names (`get`, `set`, ...). Import only the
 // trait family you use in a given scope; if both are imported, disambiguate
 // with fully-qualified syntax.
 
-/// Dispatch a redis-rs `Pipeline` through glide-core, matching the reply shape
+/// Dispatch a [`redis::Pipeline`] through glide-core, matching the reply shape
 /// `Pipeline::query_async` expects from `req_packed_commands`: one reply per
 /// command for pipelines, and the single `EXEC` reply for atomic transactions.
 async fn dispatch_pipeline(
@@ -107,7 +107,7 @@ impl redis::aio::ConnectionLike for GlideClusterClient {
         Box::pin(async move {
             let mut cmd = cmd.clone();
             // Routing is decided by glide-core from the command's keys,
-            // like redis-rs's `ClusterConnection`.
+            // mirroring cluster-aware client behaviour.
             self.inner.send_command(&mut cmd, None).await
         })
     }

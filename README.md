@@ -24,7 +24,7 @@ GLIDE binding.
 - **`custom_command` escape hatch** — run *any* command (with optional cluster
   routing) even where a typed wrapper is not provided, guaranteeing 100%
   functional coverage.
-- **Batching** — redis-rs `pipe()` pipelines and `MULTI`/`EXEC` transactions,
+- **Batching** — `pipe()` pipelines and `MULTI`/`EXEC` transactions,
   with GLIDE execution controls (`PipelineOptions`: per-call timeout and
   pipeline retry strategy) via `execute_pipeline`.
 - **Dynamic authentication** — rotate the connection password at runtime with
@@ -156,31 +156,29 @@ build, test, and benchmark.
 
 ## Migrating from redis-rs
 
-GLIDE's command API (`glide::AsyncCommands` / `glide::Commands`) is
-**source-compatible with redis-rs**: method names, signatures, and wire
-encoding match, so existing redis-rs call sites — including `Pipeline` with
+GLIDE's command API is **source-compatible with the redis-rs fork
+(v0.25.2, predating the upstream license change)**: method names, signatures,
+and wire encoding match, so existing call sites — including `Pipeline` with
 atomic transactions, scan iterators, and `Script` — compile unchanged with
 `RedisResult` errors. Everything you need is re-exported from `glide`.
 
-Under the hood this is GLIDE, not redis-rs: every command is executed by
-glide-core (multiplexing, cluster routing, reconnection, IAM auth), handed
-over **by value** on GLIDE's zero-extra-copy path — for large values this is
-measurably cheaper than redis-rs's own dispatch. The clients also implement
-`redis::aio::ConnectionLike` (sync: the blocking `redis::ConnectionLike`),
-so redis-rs `Pipeline`, scan iterators, generic code bounded on the vendored
-fork's traits (`glide::redis::AsyncCommands`), and raw `cmd().query_async()`
-all work unchanged.
+Every command is executed by glide-core (multiplexing, cluster routing,
+reconnection, IAM auth), handed over **by value** on GLIDE's zero-extra-copy
+path. The clients also implement `redis::aio::ConnectionLike` (sync: the
+blocking `redis::ConnectionLike`), so `Pipeline`, scan iterators, generic
+code bounded on the fork's traits (`glide::redis::AsyncCommands`), and raw
+`cmd().query_async()` all work unchanged.
 
 ```rust,no_run
 use glide::{AsyncCommands, GlideClient, GlideClientConfiguration, Script, pipe};
 
 # async fn demo() -> glide::RedisResult<()> {
-// redis-rs URL semantics, including rediss:// and database selection:
+// Standard connection-URL semantics, including rediss:// and database selection:
 let config = GlideClientConfiguration::from_url("redis://user:pass@localhost:6379/2")
     .expect("valid URL");
 # let mut client = GlideClient::connect(config).await.unwrap();
 
-// The redis-rs typed API, unchanged:
+// Typed commands, unchanged from redis-rs call sites:
 client.set::<_, _, ()>("key", 42).await?;
 let value: i64 = client.get("key").await?;
 
@@ -199,12 +197,12 @@ let n: i64 = script.arg(41).invoke_async(&mut client).await?;
 ```
 
 Notes:
-- `glide::AsyncCommands` / `glide::Commands` are GLIDE's command API
-  (source-compatible with redis-rs). GLIDE extension traits (streams, geo, Search `FT.*`,
-  `JSON.*`, hash field-TTL, …) cover commands beyond redis-rs's surface;
-  their names never collide with the unified traits, so import both freely.
+- `glide::AsyncCommands` / `glide::Commands` are GLIDE's command API.
+  Extension traits (streams, geo, Search `FT.*`, `JSON.*`, hash field-TTL, …)
+  cover the rest of the command surface; names never collide, so import both
+  freely.
 - Cluster: `GlideClusterClientConfiguration::from_urls([...])` accepts
-  redis-rs seed-node URLs; commands are routed automatically.
+  seed-node URLs; commands are routed automatically.
 - Mutual TLS: `config.client_identity(cert_pem, key_pem)`.
 - Large sync pipelines: `redis::Pipeline::query` on a blocking client incurs a
   packed-byte round-trip (extra payload copies). For copy-optimal blocking

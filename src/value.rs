@@ -3,7 +3,7 @@
 //!
 //! `glide-core` already normalizes many replies (RESP3 maps/doubles/booleans,
 //! Nil handling, etc.) inside `send_command`, so these helpers are thin wrappers
-//! over redis-rs's `FromRedisValue` machinery with Glide-friendly signatures.
+//! over the `redis` fork's `FromRedisValue` machinery with Glide-friendly signatures.
 
 use crate::error::{GlideError, Result};
 use bytes::Bytes;

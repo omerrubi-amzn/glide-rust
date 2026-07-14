@@ -1,7 +1,7 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
-//! GLIDE execution options for redis-rs [`Pipeline`]s.
+//! GLIDE execution options for [`Pipeline`]s.
 //!
-//! The unified API uses redis-rs pipelines directly: build with
+//! Pipelines are used directly: build with
 //! [`crate::pipe()`] (add `.atomic()` for a `MULTI`/`EXEC` transaction) and
 //! run with [`Pipeline::query_async`] / the sync
 //! [`crate::sync::PipelineExt::query_glide`]. When GLIDE-specific execution
@@ -71,7 +71,7 @@ impl PipelineOptions {
     }
 }
 
-/// Execute a redis-rs [`Pipeline`] against a core client with GLIDE options
+/// Execute a [`Pipeline`] against a core client with GLIDE options
 /// and normalize the reply to a `Vec` of per-command values (atomic
 /// transactions: the unwrapped `EXEC` reply).
 pub(crate) async fn run_pipeline(

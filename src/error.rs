@@ -94,7 +94,7 @@ impl From<RedisError> for GlideError {
             ErrorKind::CircuitBreakerOpen => GlideError::CircuitBreaker(msg),
             ErrorKind::InvalidClientConfig => GlideError::Configuration(msg),
             _ => {
-                // redis-rs reports pure timeouts via io error kind, but guard anyway.
+                // The fork reports pure timeouts via io error kind, but guard anyway.
                 if err.is_timeout() {
                     GlideError::Timeout(msg)
                 } else {

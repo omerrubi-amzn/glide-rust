@@ -240,7 +240,7 @@ impl GlideClient {
         }
     }
 
-    /// Execute a redis-rs [`redis::Pipeline`] with GLIDE execution options
+    /// Execute a the `redis` fork [`redis::Pipeline`] with GLIDE execution options
     /// (per-call timeout, pipeline retry policy) and return the raw per-command
     /// replies. Build with [`crate::pipe()`]; `.atomic()` pipelines run as a
     /// `MULTI`/`EXEC` transaction. For plain typed execution prefer
@@ -379,7 +379,7 @@ impl GlideClusterClient {
             .map_err(GlideError::from)
     }
 
-    /// Execute a redis-rs [`redis::Pipeline`] with GLIDE execution options,
+    /// Execute a the `redis` fork [`redis::Pipeline`] with GLIDE execution options,
     /// optionally routed. See [`crate::GlideClient::execute_pipeline`].
     pub async fn execute_pipeline(
         &self,
@@ -488,7 +488,7 @@ impl CommandExecutor for GlideClusterClient {
     }
 }
 
-mod connection_like;
+mod connection;
 
 // ---- unified command API dispatch ---------------------------------------------
 //
