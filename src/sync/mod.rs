@@ -471,6 +471,83 @@ macro_rules! impl_sync_owned_send {
 impl_sync_owned_send!(SyncGlideClient);
 impl_sync_owned_send!(SyncGlideClusterClient);
 
+// ---- native-copy sync pipelines ----------------------------------------------
+//
+// `redis::Pipeline::query` (blocking) serializes the pipeline to packed bytes
+// and hands them to the sync `ConnectionLike` byte interface — so our sync
+// impl must parse them back into a `Pipeline`, costing two extra payload
+// copies vs the async path (whose `ConnectionLike` receives `&Pipeline`
+// directly). `query_glide` sidesteps that: it drives the async
+// `Pipeline::query_async(&Pipeline)` path on a clone of the wrapped async
+// client, so a blocking pipeline copies the payload exactly as many times as
+// the native `Batch` API. Drop-in shape: `.query(&mut c)` -> `.query_glide(&c)`.
+
+/// A blocking GLIDE client that can run a redis-rs [`redis::Pipeline`] with
+/// **native copy behavior**. Sealed — implemented only by
+/// [`SyncGlideClient`] and [`SyncGlideClusterClient`].
+pub trait SyncPipelineTarget: sealed::Sealed {
+    /// The wrapped async connection type (a redis-rs async connection object).
+    #[doc(hidden)]
+    type Async: redis::aio::ConnectionLike;
+    /// A cheap clone of the wrapped async client (Arc inside).
+    #[doc(hidden)]
+    fn async_conn(&self) -> Self::Async;
+}
+
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for super::SyncGlideClient {}
+    impl Sealed for super::SyncGlideClusterClient {}
+}
+
+impl SyncPipelineTarget for SyncGlideClient {
+    type Async = GlideClient;
+    fn async_conn(&self) -> GlideClient {
+        self.inner.clone()
+    }
+}
+
+impl SyncPipelineTarget for SyncGlideClusterClient {
+    type Async = GlideClusterClient;
+    fn async_conn(&self) -> GlideClusterClient {
+        self.inner.clone()
+    }
+}
+
+/// Extension for running a redis-rs [`redis::Pipeline`] on a blocking GLIDE
+/// client with **native copy behavior** (no packed-byte round-trip).
+///
+/// ```no_run
+/// use glide::sync::{PipelineExt, SyncGlideClient};
+/// # fn demo(client: &SyncGlideClient) -> glide::RedisResult<()> {
+/// let (a, b): (i64, i64) = glide::pipe()
+///     .atomic()
+///     .incr("c", 1)
+///     .incr("c", 1)
+///     .query_glide(client)?;
+/// # let _ = (a, b); Ok(()) }
+/// ```
+pub trait PipelineExt {
+    /// Execute this pipeline on a blocking GLIDE client, sending the built
+    /// `Pipeline` directly to glide-core (native copy count), and decode the
+    /// replies into `T` with the same `.ignore()`/transaction semantics as
+    /// [`redis::Pipeline::query`].
+    fn query_glide<C: SyncPipelineTarget, T: redis::FromRedisValue>(
+        &self,
+        con: &C,
+    ) -> redis::RedisResult<T>;
+}
+
+impl PipelineExt for redis::Pipeline {
+    fn query_glide<C: SyncPipelineTarget, T: redis::FromRedisValue>(
+        &self,
+        con: &C,
+    ) -> redis::RedisResult<T> {
+        let mut async_conn = con.async_conn();
+        runtime().block_on(self.query_async(&mut async_conn))
+    }
+}
+
 #[cfg(test)]
 mod compat_tests {
     use super::*;

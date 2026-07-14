@@ -136,6 +136,30 @@ fn sync_pipeline_and_transaction() {
         .query(&mut c)
         .unwrap();
     assert_eq!((a, b), (1, 2));
+
+    // Native-copy path: PipelineExt::query_glide (borrows &client, sends the
+    // built Pipeline directly — no packed-byte round-trip) must produce
+    // identical results to redis-rs's .query(), including .ignore() handling
+    // and atomic transactions.
+    use glide::sync::PipelineExt;
+    let k3 = common::tkey("rrs_sp", "k3");
+    let (v3, cnt): (String, i64) = glide::pipe()
+        .set(&k3, "y")
+        .ignore()
+        .get(&k3)
+        .incr(&ctr, 5)
+        .query_glide(&c)
+        .unwrap();
+    assert_eq!((v3.as_str(), cnt), ("y", 7));
+
+    let ctr2 = common::tkey("rrs_sp", "ctr2");
+    let (x, y): (i64, i64) = glide::pipe()
+        .atomic()
+        .incr(&ctr2, 3)
+        .incr(&ctr2, 4)
+        .query_glide(&c)
+        .unwrap();
+    assert_eq!((x, y), (3, 7));
 }
 
 #[test]

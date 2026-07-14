@@ -229,17 +229,29 @@ upstream by-value `send_command` would remove that for all bindings):
 | Path | Copies |
 |---|---|
 | Native `Batch` / compat `Pipeline::query_async` | 1 |
+| **Sync `Pipeline::query_glide` (`PipelineExt`)** | **1 (= native)** |
 | Native typed methods (`StringCommands::set`, …) | 2 |
 | **Compat typed methods (`glide::AsyncCommands` / `Commands`)** | **2 (= native)** |
 | Fork traits via `ConnectionLike` (`glide::redis::AsyncCommands`) | 3 |
-| Sync compat `Pipeline::query` (packed-byte round-trip) | 3 |
+| Sync fork `Pipeline::query` (packed-byte round-trip) | 3 |
 | `Script` invoke | 3 (interleaved key/arg buffers; redis-rs-inherent +1) |
 
 Measured (10MB SET, loopback, release): native 25.18 ms ≈ owned-send compat
 25.30 ms; fork `ConnectionLike` path 25.89 ms (+~0.7 ms = the extra copy).
-Read paths have zero extra copies everywhere. For large values prefer the
-typed traits or `Batch`; the escape hatch `glide_send_owned(cmd)` sends any
-custom command with zero extra copies.
+Read paths have zero extra copies everywhere.
+
+The only wrapper-side path that still pays extra copies is the blocking
+`redis::Pipeline::query`: its sync `ConnectionLike` interface takes packed
+bytes (unlike the async trait, which takes `&Pipeline`), forcing an
+encode→parse→rebuild round-trip. This is structural to the fork's blocking
+trait and cannot be fixed under the literal `.query()` call. The remedy is
+[`sync::PipelineExt::query_glide`], which sends the built `&Pipeline` directly
+through the async path (1 copy, native parity) — `pipe()…​.query(&mut c)` →
+`pipe()…​.query_glide(&c)`. Native `Batch` is equally copy-optimal.
+
+The `Script` +1 is redis-rs-inherent (matches the fork's own `Script`), not a
+wrapper gap. The escape hatch `glide_send_owned(cmd)` sends any custom command
+with zero extra copies.
 
 ### Semver implication of re-exporting the fork
 

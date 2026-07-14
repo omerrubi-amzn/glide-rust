@@ -206,6 +206,9 @@ Notes:
 - Cluster: `GlideClusterClientConfiguration::from_urls([...])` accepts
   redis-rs seed-node URLs; commands are routed automatically.
 - Mutual TLS: `config.client_identity(cert_pem, key_pem)`.
+- Large sync pipelines: `redis::Pipeline::query` on a blocking client incurs a
+  packed-byte round-trip (extra payload copies). For copy-optimal blocking
+  pipelines use `sync::PipelineExt::query_glide(&client)` (or native `Batch`).
 - See `PARITY.md` for the full parity analysis and the few accepted gaps
   (no Sentinel/unix sockets — unsupported by glide-core; Pub/Sub stays
   client-integrated).
