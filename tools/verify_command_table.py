@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Verify that the hand-maintained command table in src/commands/core.rs is
-signature-compatible with the vendored redis-rs fork's implement_commands!
-table.
+"""Verify GLIDE's command table (src/commands/core.rs) against the vendored
+fork's implement_commands! table (redis-rs fork, v0.25.2 — predating the
+upstream license change).
 
 For every method in the fork's table this checks that our table has an entry
 with the same name, the same generic parameters (names, bounds, and order —

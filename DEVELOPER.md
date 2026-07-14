@@ -104,7 +104,7 @@ redis-rs fork's `implement_commands!` table (names, generic order, argument
 lists) and fails on any divergence:
 
 ```bash
-python3 tools/verify_redis_parity.py   # standalone
+python3 tools/verify_command_table.py   # standalone
 cargo test --test it_parity_guard      # same check as a test (skips without python/fork)
 ```
 

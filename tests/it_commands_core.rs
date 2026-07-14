@@ -1,19 +1,17 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
-//! redis-rs API parity tests.
-//!
-//! `GlideClient` / `GlideClusterClient` implement `redis::aio::ConnectionLike`,
-//! so the redis-rs `AsyncCommands` trait, `Pipeline`, and scan iterators work on
-//! them directly. These tests exercise that surface end-to-end against a live
-//! server on RESP2 and RESP3 — including commands whose replies glide-core
-//! normalizes (maps, sets, doubles, booleans), to prove redis-rs typed decoding
-//! (`FromRedisValue`) still behaves as redis-rs users expect.
+//! Live tests for GLIDE's command API (`glide::AsyncCommands`): typed
+//! commands, `Pipeline` (plain and atomic), scan iterators, and the error
+//! surface, exercised end-to-end against a live server on RESP2 and RESP3 —
+//! including commands whose replies glide-core normalizes (maps, sets,
+//! doubles, booleans), to prove typed decoding (`FromRedisValue`) behaves as
+//! migrated call sites expect.
 
 mod common;
 
 use glide::{AsyncCommands, RedisResult, pipe};
 use std::collections::{HashMap, HashSet};
 
-// ---- typed AsyncCommands methods (exact redis-rs signatures) ----------------
+// ---- typed AsyncCommands methods -----------------------------------------------
 
 matrix_test!(set_get_typed, c, {
     let c = c;
@@ -27,23 +25,23 @@ matrix_test!(set_get_typed, c, {
 
 matrix_test!(get_missing_option_none, c, {
     let c = c;
-    let v: Option<String> = c.get(common::key("rrs_missing")).await.unwrap();
+    let v: Option<String> = c.get(common::key("cmd_missing")).await.unwrap();
     assert_eq!(v, None);
 });
 
 matrix_test!(incr_decr_typed, c, {
     let c = c;
-    let k = common::key("rrs_ctr");
+    let k = common::key("cmd_ctr");
     let v: i64 = c.incr(&k, 5).await.unwrap();
     assert_eq!(v, 5);
     let v: i64 = c.decr(&k, 2).await.unwrap();
     assert_eq!(v, 3);
 });
 
-matrix_test!(redis_rs_names_work, c, {
-    // Methods whose redis-rs names differ from our native trait names.
+matrix_test!(migrated_method_names_work, c, {
+    // Methods whose table names differ from the old native trait names.
     let c = c;
-    let k = common::key("rrs_names");
+    let k = common::key("cmd_names");
     c.set_ex::<_, _, ()>(&k, "v", 100).await.unwrap();
     let ttl: i64 = c.ttl(&k).await.unwrap();
     assert!(ttl > 0 && ttl <= 100);
@@ -58,8 +56,8 @@ matrix_test!(redis_rs_names_work, c, {
 matrix_test!(deprecated_commands_still_work, c, {
     // The fork keeps deprecated commands (HMSET, RPOPLPUSH); same-slot keys.
     let c = c;
-    let src = common::tkey("rrs_dep", "src");
-    let dst = common::tkey("rrs_dep", "dst");
+    let src = common::tkey("cmd_dep", "src");
+    let dst = common::tkey("cmd_dep", "dst");
     c.rpush::<_, _, ()>(&src, &["a", "b"]).await.unwrap();
     let moved: String = c.rpoplpush(&src, &dst).await.unwrap();
     assert_eq!(moved, "b");
@@ -69,9 +67,9 @@ matrix_test!(deprecated_commands_still_work, c, {
 
 matrix_test!(hgetall_decodes_to_hashmap, c, {
     // glide-core normalizes HGETALL to a map on both RESP2 and RESP3;
-    // redis-rs HashMap decoding must accept it.
+    // HashMap decoding must accept it.
     let c = c;
-    let k = common::key("rrs_hash");
+    let k = common::key("cmd_hash");
     c.hset_multiple::<_, _, _, ()>(&k, &[("f1", "v1"), ("f2", "v2")])
         .await
         .unwrap();
@@ -83,7 +81,7 @@ matrix_test!(hgetall_decodes_to_hashmap, c, {
 
 matrix_test!(bool_normalization_decodes, c, {
     let c = c;
-    let k = common::key("rrs_set");
+    let k = common::key("cmd_set");
     c.sadd::<_, _, ()>(&k, "member").await.unwrap();
     let yes: bool = c.sismember(&k, "member").await.unwrap();
     let no: bool = c.sismember(&k, "nope").await.unwrap();
@@ -95,7 +93,7 @@ matrix_test!(bool_normalization_decodes, c, {
 
 matrix_test!(smembers_decodes_to_hashset, c, {
     let c = c;
-    let k = common::key("rrs_sm");
+    let k = common::key("cmd_sm");
     c.sadd::<_, _, ()>(&k, &["a", "b", "c"]).await.unwrap();
     let members: HashSet<String> = c.smembers(&k).await.unwrap();
     assert_eq!(
@@ -106,7 +104,7 @@ matrix_test!(smembers_decodes_to_hashset, c, {
 
 matrix_test!(zset_double_normalization_decodes, c, {
     let c = c;
-    let k = common::key("rrs_z");
+    let k = common::key("cmd_z");
     let added: i64 = c
         .zadd_multiple(&k, &[(1.5, "one"), (2.5, "two")])
         .await
@@ -118,14 +116,14 @@ matrix_test!(zset_double_normalization_decodes, c, {
     // (lexicographic tiebreak), which is not what this test wants to observe.
     let incremented: f64 = c.zincr(&k, "one", 0.4).await.unwrap();
     assert_eq!(incremented, 1.9);
-    // ZPOPMIN reply is normalized; redis-rs decodes member/score pairs.
+    // ZPOPMIN reply is normalized; decodes as member/score pairs.
     let popped: Vec<(String, f64)> = c.zpopmin(&k, 1).await.unwrap();
     assert_eq!(popped, vec![("one".to_string(), 1.9)]);
 });
 
 matrix_test!(zrange_withscores_decodes, c, {
     let c = c;
-    let k = common::key("rrs_zr");
+    let k = common::key("cmd_zr");
     c.zadd_multiple::<_, _, _, ()>(&k, &[(1.0, "a"), (2.0, "b")])
         .await
         .unwrap();
@@ -137,8 +135,8 @@ matrix_test!(zrange_withscores_decodes, c, {
 
 matrix_test!(pipeline_query_async, c, {
     let mut c = c;
-    let k1 = common::tkey("rrs_pipe", "k1");
-    let k2 = common::tkey("rrs_pipe", "k2");
+    let k1 = common::tkey("cmd_pipe", "k1");
+    let k2 = common::tkey("cmd_pipe", "k2");
     let (v1, v2): (String, i64) = pipe()
         .set(&k1, "hello")
         .ignore()
@@ -155,7 +153,7 @@ matrix_test!(pipeline_query_async, c, {
 
 matrix_test!(atomic_transaction_query_async, c, {
     let mut c = c;
-    let k = common::tkey("rrs_tx", "ctr");
+    let k = common::tkey("cmd_tx", "ctr");
     let (a, b): (i64, i64) = pipe()
         .atomic()
         .incr(&k, 1)
@@ -170,11 +168,11 @@ matrix_test!(atomic_transaction_query_async, c, {
 
 matrix_test!(wrong_type_returns_redis_error, c, {
     let c = c;
-    let k = common::key("rrs_err");
+    let k = common::key("cmd_err");
     c.set::<_, _, ()>(&k, "text").await.unwrap();
     let res: RedisResult<Vec<String>> = c.lrange(&k, 0, -1).await;
     let err = res.unwrap_err();
-    // Exact fork semantics: the vendored fork (unlike upstream redis-rs 0.25)
+    // Exact fork semantics: the vendored fork (unlike upstream releases)
     // does not map WRONGTYPE to ErrorKind::TypeError — server WRONGTYPE
     // surfaces as ExtensionError with code() == "WRONGTYPE". Our compat path
     // must be fork-faithful; assert both kind and code.
@@ -184,9 +182,9 @@ matrix_test!(wrong_type_returns_redis_error, c, {
 
 matrix_test!(error_inside_pipeline_surfaces_as_err, c, {
     // A mid-pipeline server error must surface as Err (glide-core's
-    // raise_on_error path ≙ redis-rs's `make_pipeline_results` extraction).
+    // raise_on_error path ≙ the fork's `make_pipeline_results` extraction).
     let mut c = c;
-    let k = common::tkey("rrs_pipe_err", "k");
+    let k = common::tkey("cmd_pipe_err", "k");
     c.set::<_, _, ()>(&k, "text").await.unwrap();
     let res: RedisResult<(String, Vec<String>, String)> = pipe()
         .get(&k)
@@ -201,7 +199,7 @@ matrix_test!(error_inside_pipeline_surfaces_as_err, c, {
 matrix_test!(error_inside_transaction_surfaces_as_err, c, {
     // Same for an atomic transaction: EXEC's per-command error must become Err.
     let mut c = c;
-    let k = common::tkey("rrs_tx_err", "k");
+    let k = common::tkey("cmd_tx_err", "k");
     c.set::<_, _, ()>(&k, "text").await.unwrap();
     let res: RedisResult<(String, Vec<String>)> = pipe()
         .atomic()
@@ -217,7 +215,7 @@ matrix_test!(error_inside_transaction_surfaces_as_err, c, {
 
 resp_test!(scan_match_iterator, c, {
     let mut c = c;
-    let prefix = common::key("rrs_scan");
+    let prefix = common::key("cmd_scan");
     for i in 0..10 {
         c.set::<_, _, ()>(format!("{prefix}:{i}"), i).await.unwrap();
     }

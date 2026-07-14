@@ -43,7 +43,7 @@ and `glide::Commands` (blocking) are defined by a **hand-maintained command
 table** (`src/commands/core.rs`, one `implement_glide_commands!` macro
 invocation — the same declarative pattern the fork itself uses) mirroring the vendored
 fork's `implement_commands!` table, enforced by a signature-parity guard
-(`tools/verify_redis_parity.py`, run by `tests/it_parity_guard.rs`).
+(`tools/verify_command_table.py`, run by `tests/it_parity_guard.rs`).
 Method names, generic parameter order, and
 wire encoding match the fork exactly (methods delegate to its own
 `Cmd::<name>()` constructors), with two deliberate deviations: methods take

@@ -1,8 +1,10 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
-//! redis-rs parity: Script, `from_url`, blocking `Commands`, and decode checks
-//! for reply shapes glide-core restructures (streams, geo, CONFIG GET).
+//! Live tests for the rest of the command-API surface: `Script`, `from_url`
+//! configuration, the blocking `Commands` trait, decode checks for reply
+//! shapes glide-core restructures (streams, geo, CONFIG GET), and cluster
+//! coverage.
 //!
-//! Companion to `it_redis_rs_api.rs`.
+//! Companion to `it_commands_core.rs`.
 
 mod common;
 
@@ -12,12 +14,12 @@ use glide::{
 };
 use std::collections::HashMap;
 
-// ---- Script (clean-room redis-rs Script type) ---------------------------------
+// ---- Script ----------------------------------------------------------------------
 
 matrix_test!(script_invoke_with_keys_and_args, c, {
     let c = c;
     let script = Script::new("return redis.call('SET', KEYS[1], ARGV[1])");
-    let k = common::key("rrs_script");
+    let k = common::key("cmd_script");
     let _: () = script.key(&k).arg("stored").invoke_async(&c).await.unwrap();
     let v: String = c.get(&k).await.unwrap();
     assert_eq!(v, "stored");
@@ -58,7 +60,7 @@ timed_tokio_test!(
         assert_eq!(cfg.database_id, 1);
         let c1 = glide::GlideClient::connect(cfg).await.unwrap();
 
-        let k = common::key("rrs_url_db");
+        let k = common::key("cmd_url_db");
         c1.set::<_, _, ()>(&k, "in-db-1").await.unwrap();
 
         // A db-0 client must not see the key; a second db-1 client must.
@@ -89,15 +91,15 @@ fn sync_commands_trait_typed_api() {
     ))
     .unwrap();
 
-    let k = common::key("rrs_sync");
-    // Typed redis-rs blocking API (Commands trait), exact signatures.
+    let k = common::key("cmd_sync");
+    // Typed blocking API (Commands trait).
     Commands::set::<_, _, ()>(&c, &k, 42).unwrap();
     let v: i64 = Commands::get(&c, &k).unwrap();
     assert_eq!(v, 42);
     let v: i64 = Commands::incr(&c, &k, 8).unwrap();
     assert_eq!(v, 50);
 
-    let h = common::key("rrs_sync_h");
+    let h = common::key("cmd_sync_h");
     Commands::hset_multiple::<_, _, _, ()>(&c, &h, &[("a", "1"), ("b", "2")]).unwrap();
     let all: HashMap<String, String> = Commands::hgetall(&c, &h).unwrap();
     assert_eq!(all.len(), 2);
@@ -112,8 +114,8 @@ fn sync_pipeline_and_transaction() {
     ))
     .unwrap();
 
-    let k1 = common::tkey("rrs_sp", "k1");
-    let k2 = common::tkey("rrs_sp", "k2");
+    let k1 = common::tkey("cmd_sp", "k1");
+    let k2 = common::tkey("cmd_sp", "k2");
     let (v1, v2): (String, i64) = glide::pipe()
         .set(&k1, "x")
         .ignore()
@@ -125,7 +127,7 @@ fn sync_pipeline_and_transaction() {
         .unwrap();
     assert_eq!((v1.as_str(), v2), ("x", 9));
 
-    let ctr = common::tkey("rrs_sp", "ctr");
+    let ctr = common::tkey("cmd_sp", "ctr");
     let (a, b): (i64, i64) = glide::pipe()
         .atomic()
         .incr(&ctr, 1)
@@ -136,10 +138,10 @@ fn sync_pipeline_and_transaction() {
 
     // Native-copy path: PipelineExt::query_glide (borrows &client, sends the
     // built Pipeline directly — no packed-byte round-trip) must produce
-    // identical results to redis-rs's .query(), including .ignore() handling
+    // identical results to `Pipeline::query`, including .ignore() handling
     // and atomic transactions.
     use glide::sync::PipelineExt;
-    let k3 = common::tkey("rrs_sp", "k3");
+    let k3 = common::tkey("cmd_sp", "k3");
     let (v3, cnt): (String, i64) = glide::pipe()
         .set(&k3, "y")
         .ignore()
@@ -149,7 +151,7 @@ fn sync_pipeline_and_transaction() {
         .unwrap();
     assert_eq!((v3.as_str(), cnt), ("y", 7));
 
-    let ctr2 = common::tkey("rrs_sp", "ctr2");
+    let ctr2 = common::tkey("cmd_sp", "ctr2");
     let (x, y): (i64, i64) = glide::pipe()
         .atomic()
         .incr(&ctr2, 3)
@@ -162,7 +164,7 @@ fn sync_pipeline_and_transaction() {
 #[test]
 fn sync_pipeline_with_literal_multi_exec_is_not_atomic() {
     // A plain (non-atomic) pipeline containing literal MULTI/EXEC commands —
-    // manual transaction management, a real redis-rs pattern. Transaction
+    // manual transaction management, a real migration pattern. Transaction
     // detection is driven by the trait call's offset/count, so this must NOT
     // be collapsed into a glide-core transaction: each command gets a reply.
     let srv = server_or_skip!();
@@ -172,7 +174,7 @@ fn sync_pipeline_with_literal_multi_exec_is_not_atomic() {
     ))
     .unwrap();
 
-    let ctr = common::tkey("rrs_literal_tx", "ctr");
+    let ctr = common::tkey("cmd_literal_tx", "ctr");
     let (multi_ok, queued, exec_replies): (String, String, Vec<i64>) = glide::pipe()
         .cmd("MULTI")
         .cmd("INCR")
@@ -196,7 +198,7 @@ fn sync_script_invoke_and_load() {
     .unwrap();
 
     let script = Script::new("return redis.call('SET', KEYS[1], ARGV[1])");
-    let k = common::key("rrs_sync_script");
+    let k = common::key("cmd_sync_script");
     let _: () = script.key(&k).arg("stored-sync").invoke(&c).unwrap();
     let v: String = Commands::get(&c, &k).unwrap();
     assert_eq!(v, "stored-sync");
@@ -227,7 +229,7 @@ resp_test!(script_load_async_returns_hash, c, {
 });
 
 resp_test!(noscript_errorkind_passthrough, c, {
-    // redis-rs users `match err.kind()`; NOSCRIPT must surface as
+    // migrated call sites `match err.kind()`; NOSCRIPT must surface as
     // ErrorKind::NoScriptError outside the Script type's internal fallback.
     let mut c = c;
     let _: () = cmd("SCRIPT")
@@ -259,10 +261,10 @@ matrix_test!(config_get_decodes_to_map, c, {
 });
 
 matrix_test!(xadd_xlen_via_cmd, c, {
-    // The fork has no typed stream methods — redis-rs users drive streams via
+    // The fork has no typed stream methods — migrated call sites drive streams via
     // cmd(); verify typed decoding of the replies.
     let mut c = c;
-    let k = common::key("rrs_stream");
+    let k = common::key("cmd_stream");
     let id1: String = cmd("XADD")
         .arg(&k)
         .arg("*")
@@ -288,7 +290,7 @@ matrix_test!(xrange_decode_shape, c, {
     // glide-core normalizes stream-entry replies to a map of id -> flat
     // field-value array; verify it decodes into standard containers.
     let mut c = c;
-    let k = common::key("rrs_xr");
+    let k = common::key("cmd_xr");
     let _: String = cmd("XADD")
         .arg(&k)
         .arg("1-1")
@@ -320,7 +322,7 @@ matrix_test!(xrange_decode_shape, c, {
 matrix_test!(geo_decode_shapes, c, {
     // The fork has no typed geo methods either — cmd()-driven, typed decode.
     let mut c = c;
-    let k = common::key("rrs_geo");
+    let k = common::key("cmd_geo");
     let added: i64 = cmd("GEOADD")
         .arg(&k)
         .arg(13.361389)
@@ -360,7 +362,7 @@ matrix_test!(lmpop_typed_method, c, {
     if common::version_below(&c, (7, 0, 0)).await {
         return;
     }
-    let k = common::tkey("rrs_lmpop", "l1");
+    let k = common::tkey("cmd_lmpop", "l1");
     let _: () = c.rpush(&k, &["a", "b"]).await.unwrap();
     // Fork signature: lmpop(numkeys, key, dir, count); normalized reply:
     // (key, [elements]).
@@ -375,7 +377,7 @@ matrix_test!(lmpop_typed_method, c, {
 async fn cluster_from_urls_connects_and_routes() {
     let cluster = cluster_or_skip!();
     // Build seed-node URLs from the real cluster's primaries and connect via
-    // the redis-rs-style URL constructor.
+    // the URL constructor.
     let urls: Vec<String> = cluster
         .primary_ports
         .iter()
@@ -392,7 +394,7 @@ async fn cluster_from_urls_connects_and_routes() {
     };
     // Keys hash to different slots; the compat typed API routes each.
     for i in 0..20 {
-        let k = format!("rrs_cluster_url:{i}");
+        let k = format!("cmd_cluster_url:{i}");
         AsyncCommands::set::<_, _, ()>(&c, &k, i).await.unwrap();
         let v: i64 = AsyncCommands::get(&c, &k).await.unwrap();
         assert_eq!(v, i);
@@ -412,8 +414,8 @@ fn sync_cluster_commands_trait() {
             return;
         }
     };
-    // Blocking redis-rs typed API on the cluster client.
-    let k = format!("rrs_sync_cluster:{}", common::key("k"));
+    // Blocking typed API on the cluster client.
+    let k = format!("cmd_sync_cluster:{}", common::key("k"));
     Commands::set::<_, _, ()>(&c, &k, 123).unwrap();
     let v: i64 = Commands::get(&c, &k).unwrap();
     assert_eq!(v, 123);

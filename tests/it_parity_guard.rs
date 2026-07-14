@@ -1,6 +1,6 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
 //! Parity guards for the unified command table (`src/commands/core.rs`):
-//!  * `command_table_matches_fork` — runs `tools/verify_redis_parity.py`,
+//!  * `command_table_matches_fork` — runs `tools/verify_command_table.py`,
 //!    which compares every method signature in our hand-maintained table
 //!    against the vendored redis-rs fork's `implement_commands!` table
 //!    (names, generic order, argument lists). Skips gracefully when Python
@@ -18,7 +18,7 @@ use std::process::Command;
 #[test]
 fn command_table_matches_fork() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let verifier = Path::new(manifest_dir).join("tools/verify_redis_parity.py");
+    let verifier = Path::new(manifest_dir).join("tools/verify_command_table.py");
     if !verifier.exists() {
         eprintln!("SKIP: verifier not found");
         return;
