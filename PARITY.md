@@ -181,12 +181,22 @@ provide naming shims (`get_message` alias) only.
 
 | Phase | Work | Status |
 |---|---|---|
-| **0** | B1 spike: normalized-value decoding vs `FromRedisValue` | ✅ **Done.** Static: the fork's `FromRedisValue` accepts `Boolean`/`Double`/`Map`/`Set`. Live: 54 differential tests (maps, sets, doubles, booleans, pairs) pass on RESP2+RESP3 × standalone+cluster. |
+| **0** | B1 spike: normalized-value decoding vs `FromRedisValue` | ✅ **Done.** Static: the fork's `FromRedisValue` accepts `Boolean`/`Double`/`Map`/`Set`. Live: differential tests (maps, sets, doubles, booleans, pairs, streams, geo, CONFIG GET, LMPOP) pass on RESP2+RESP3 × standalone+cluster. |
 | **1** | `redis::aio::ConnectionLike` **implemented directly on both clients**; unlocks `AsyncCommands`, `Pipeline` (bridged to `send_pipeline`/`send_transaction`), scan iterators | ✅ **Done** (`src/client.rs`, tests in `tests/it_redis_rs_api.rs`). |
-| **2** | Establishment ergonomics: `from_url` / `IntoConnectionInfo` for both configs; mTLS if core supports | ⬜ |
+| **2** | Establishment ergonomics: `from_url` / `from_connection_info` / `from_urls` (redis-rs URL semantics via the fork's `IntoConnectionInfo`); `client_identity()` **mutual TLS** on both configs (lowered to `ConnectionRequest::client_cert`/`client_key`) | ✅ **Done** (`src/config.rs`; unit + live tests). |
 | **3** | ~~Native-API naming aliases for the 55 methods~~ | ❌ Dropped — direct trait impl provides exact parity. |
-| **4** | Clean-room `Script` type; sync `Commands` trait for the `sync` layer | ⬜ |
-| **5** | Verification: broaden the parity suite (streams/xinfo shapes, geo, `Iter` edge cases); doc examples | ◐ Core suite landed. |
+| **4** | Clean-room `Script`/`ScriptInvocation` (`src/script.rs`: SHA-1 caching, EVALSHA→EVAL `NOSCRIPT` fallback, works on both clients); **blocking `Commands`** via sync `redis::ConnectionLike` on `SyncGlideClient`/`SyncGlideClusterClient` (`src/sync/mod.rs`: `req_command` fast path, packed-byte pipeline decode, MULTI/EXEC → core transactions) | ✅ **Done.** |
+| **5** | Verification: parity suites `tests/it_redis_rs_api.rs` + `tests/it_redis_rs_extra.rs` (87 live executions), doc examples | ✅ **Done** — full suite 1215 tests green, clippy + fmt clean. |
+
+### Remaining known gaps (accepted / deferred)
+
+- **N3–N6** (`tcp_nodelay` is in fact always enabled by our `base_request`;
+  `address_resolver`, caching toggles, per-request retry knobs): deferred —
+  niche, no customer ask.
+- **Pub/Sub model**: intentionally kept client-integrated (core owns
+  resubscription); no `PubSub` connection object.
+- **Sentinel / async-std / unix sockets**: unsupported by glide-core; out of
+  scope (`from_url` rejects unix-socket URLs with a clear error).
 
 ### Known limitations of the direct impl
 

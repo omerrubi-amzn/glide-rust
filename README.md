@@ -151,8 +151,55 @@ client.custom_command_with_route(&["PING"], Route::AllPrimaries).await?;
 # Ok(()) }
 ```
 
-See `DESIGN.md` for architecture, and `DEVELOPER.md` for how to
+See `DESIGN.md` and `PARITY.md` for architecture, and `DEVELOPER.md` for how to
 build, test, and benchmark.
+
+## Migrating from redis-rs
+
+Both clients are **first-class redis-rs connection objects**: they implement
+`redis::aio::ConnectionLike` (and the sync clients implement the blocking
+`redis::ConnectionLike`), so the complete redis-rs typed API — `AsyncCommands`
+/ `Commands`, `Pipeline` (incl. atomic transactions), scan iterators, and
+`Script` — works on them with **exact redis-rs signatures and `RedisResult`
+errors**. Everything you need is re-exported from `glide`:
+
+```rust,no_run
+use glide::{AsyncCommands, GlideClient, GlideClientConfiguration, Script, pipe};
+
+# async fn demo() -> glide::RedisResult<()> {
+// redis-rs URL semantics, including rediss:// and database selection:
+let config = GlideClientConfiguration::from_url("redis://user:pass@localhost:6379/2")
+    .expect("valid URL");
+# let mut client = GlideClient::connect(config).await.unwrap();
+
+// The redis-rs typed API, unchanged:
+client.set::<_, _, ()>("key", 42).await?;
+let value: i64 = client.get("key").await?;
+
+// Pipelines and transactions:
+let (a, b): (i64, i64) = pipe()
+    .atomic()
+    .incr("counter", 1)
+    .incr("counter", 1)
+    .query_async(&mut client)
+    .await?;
+
+// Lua scripts with EVALSHA caching:
+let script = Script::new("return tonumber(ARGV[1]) + 1");
+let n: i64 = script.arg(41).invoke_async(&mut client).await?;
+# Ok(()) }
+```
+
+Notes:
+- Import **either** the redis-rs traits (`glide::AsyncCommands`) **or** the
+  native GLIDE traits (`glide::StringCommands`, …) in a given scope — they
+  share method names, so importing both requires fully-qualified calls.
+- Cluster: `GlideClusterClientConfiguration::from_urls([...])` accepts
+  redis-rs seed-node URLs; commands are routed automatically.
+- Mutual TLS: `config.client_identity(cert_pem, key_pem)`.
+- See `PARITY.md` for the full parity analysis and the few accepted gaps
+  (no Sentinel/unix sockets — unsupported by glide-core; Pub/Sub stays
+  client-integrated).
 
 ## Testing
 
