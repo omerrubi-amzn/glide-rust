@@ -239,3 +239,202 @@ impl SyncGlideClusterClient {
         runtime().block_on(self.inner.ping())
     }
 }
+
+// ---- redis-rs sync API compatibility -----------------------------------------
+//
+// The fork blanket-implements the blocking typed API over the sync trait:
+//
+//     impl<T> Commands for T where T: ConnectionLike {}
+//
+// so implementing `redis::ConnectionLike` here makes `SyncGlideClient` /
+// `SyncGlideClusterClient` first-class blocking redis-rs connection objects
+// (`use glide::Commands;`), mirroring what the async clients do with
+// `redis::aio::ConnectionLike`.
+//
+// The sync trait's required methods take *packed bytes*. Typed `Commands`
+// methods always go through the provided `req_command(&Cmd)` — which we
+// override to bridge straight to the async impl, no byte round-trip — and
+// `Pipeline::query` sends `encode_pipeline` output: a sequence of RESP arrays
+// of bulk strings that we decode back into commands with the fork's own
+// `parse_redis_value`.
+
+/// Decode packed command bytes (RESP arrays of bulk strings, as produced by
+/// `Cmd::get_packed_command` / `encode_pipeline`) back into `Cmd`s.
+///
+/// The packed-command wire format is strict and self-delimiting —
+/// `*<n>\r\n` followed by `n` × `$<len>\r\n<data>\r\n` — so consecutive
+/// commands are parsed incrementally.
+fn unpack_commands(bytes: &[u8]) -> redis::RedisResult<Vec<redis::Cmd>> {
+    fn malformed(what: &'static str) -> redis::RedisError {
+        redis::RedisError::from((
+            redis::ErrorKind::ClientError,
+            "malformed packed command",
+            what.to_string(),
+        ))
+    }
+    /// Read `<digits>\r\n` after the given type marker; returns (value, rest).
+    fn read_len(bytes: &[u8], marker: u8) -> redis::RedisResult<(usize, &[u8])> {
+        let rest = bytes
+            .strip_prefix(&[marker])
+            .ok_or_else(|| malformed("missing type marker"))?;
+        let end = rest
+            .windows(2)
+            .position(|w| w == b"\r\n")
+            .ok_or_else(|| malformed("missing CRLF after length"))?;
+        let len = std::str::from_utf8(&rest[..end])
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .ok_or_else(|| malformed("invalid length"))?;
+        Ok((len, &rest[end + 2..]))
+    }
+
+    let mut out = Vec::new();
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        let (argc, mut cur) = read_len(rest, b'*')?;
+        let mut cmd = redis::Cmd::new();
+        for _ in 0..argc {
+            let (len, data_and_rest) = read_len(cur, b'$')?;
+            if data_and_rest.len() < len + 2 || &data_and_rest[len..len + 2] != b"\r\n" {
+                return Err(malformed("truncated bulk string"));
+            }
+            cmd.arg(&data_and_rest[..len]);
+            cur = &data_and_rest[len + 2..];
+        }
+        out.push(cmd);
+        rest = cur;
+    }
+    Ok(out)
+}
+
+/// Is this command a bare `NAME` (single-arg command like MULTI/EXEC)?
+fn is_bare_command(cmd: &redis::Cmd, name: &[u8]) -> bool {
+    let mut args = cmd.args_iter();
+    args.len() == 1
+        && args.next().is_some_and(
+            |a| matches!(a, redis::Arg::Simple(bytes) if bytes.eq_ignore_ascii_case(name)),
+        )
+}
+
+/// Rebuild a logical [`redis::Pipeline`] from packed pipeline bytes.
+/// `encode_pipeline` wraps transactions in MULTI…EXEC; strip them and mark the
+/// pipeline atomic instead (glide-core re-adds MULTI/EXEC in
+/// `send_transaction`).
+fn unpack_pipeline(bytes: &[u8]) -> redis::RedisResult<redis::Pipeline> {
+    let mut commands = unpack_commands(bytes)?;
+    let is_transaction = commands.len() >= 2
+        && commands
+            .first()
+            .is_some_and(|c| is_bare_command(c, b"MULTI"))
+        && commands.last().is_some_and(|c| is_bare_command(c, b"EXEC"));
+    let mut pipeline = redis::Pipeline::with_capacity(commands.len());
+    if is_transaction {
+        pipeline.atomic();
+        commands.pop(); // EXEC
+        commands.remove(0); // MULTI
+    }
+    for cmd in commands {
+        pipeline.add_command(cmd);
+    }
+    Ok(pipeline)
+}
+
+/// Implement the sync `redis::ConnectionLike` by bridging to the async
+/// `redis::aio::ConnectionLike` impl on the wrapped async client.
+macro_rules! impl_sync_connection_like {
+    ($sync_ty:ty, $get_db:expr) => {
+        impl redis::ConnectionLike for $sync_ty {
+            fn req_command(&mut self, cmd: &redis::Cmd) -> redis::RedisResult<Value> {
+                // Fast path used by all typed `Commands` methods: no byte
+                // round-trip.
+                runtime().block_on(redis::aio::ConnectionLike::req_packed_command(
+                    &mut self.inner,
+                    cmd,
+                ))
+            }
+
+            fn req_packed_command(&mut self, cmd: &[u8]) -> redis::RedisResult<Value> {
+                let commands = unpack_commands(cmd)?;
+                let [ref cmd] = commands[..] else {
+                    return Err(redis::RedisError::from((
+                        redis::ErrorKind::ClientError,
+                        "expected exactly one packed command",
+                    )));
+                };
+                runtime().block_on(redis::aio::ConnectionLike::req_packed_command(
+                    &mut self.inner,
+                    cmd,
+                ))
+            }
+
+            fn req_packed_commands(
+                &mut self,
+                cmd: &[u8],
+                offset: usize,
+                count: usize,
+            ) -> redis::RedisResult<Vec<Value>> {
+                let pipeline = unpack_pipeline(cmd)?;
+                runtime().block_on(redis::aio::ConnectionLike::req_packed_commands(
+                    &mut self.inner,
+                    &pipeline,
+                    offset,
+                    count,
+                    None,
+                ))
+            }
+
+            fn get_db(&self) -> i64 {
+                #[allow(clippy::redundant_closure_call)]
+                ($get_db)(self)
+            }
+
+            fn check_connection(&mut self) -> bool {
+                self.ping().is_ok()
+            }
+
+            fn is_open(&self) -> bool {
+                // glide-core owns reconnection; see the async impl's
+                // `is_closed`.
+                true
+            }
+        }
+    };
+}
+
+impl_sync_connection_like!(SyncGlideClient, |c: &SyncGlideClient| c.inner.db());
+// Cluster deployments always use database 0.
+impl_sync_connection_like!(SyncGlideClusterClient, |_c: &SyncGlideClusterClient| 0);
+
+#[cfg(test)]
+mod compat_tests {
+    use super::*;
+
+    #[test]
+    fn unpack_single_command_roundtrip() {
+        let mut cmd = redis::Cmd::new();
+        cmd.arg("SET").arg("key").arg("value");
+        let packed = cmd.get_packed_command();
+        let unpacked = unpack_commands(&packed).unwrap();
+        assert_eq!(unpacked.len(), 1);
+        let args: Vec<_> = unpacked[0].args_iter().collect();
+        assert_eq!(args.len(), 3);
+    }
+
+    #[test]
+    fn unpack_pipeline_plain() {
+        let mut p = redis::Pipeline::new();
+        p.cmd("SET").arg("a").arg("1").cmd("GET").arg("a");
+        let pipeline = unpack_pipeline(&p.get_packed_pipeline()).unwrap();
+        assert!(!pipeline.is_atomic());
+        assert_eq!(pipeline.len(), 2);
+    }
+
+    #[test]
+    fn unpack_pipeline_transaction_strips_multi_exec() {
+        let mut p = redis::Pipeline::new();
+        p.atomic().cmd("INCR").arg("c").cmd("INCR").arg("c");
+        let pipeline = unpack_pipeline(&p.get_packed_pipeline()).unwrap();
+        assert!(pipeline.is_atomic());
+        assert_eq!(pipeline.len(), 2, "MULTI/EXEC must be stripped");
+    }
+}

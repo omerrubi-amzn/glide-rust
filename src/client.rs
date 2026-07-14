@@ -187,6 +187,12 @@ impl GlideClient {
         &self.inner
     }
 
+    /// The configured logical database index (crate-internal; used by the sync
+    /// layer's `ConnectionLike` impl).
+    pub(crate) fn db(&self) -> i64 {
+        self.db
+    }
+
     /// Wait for the next Pub/Sub message on this client's configured
     /// subscriptions (`get_pubsub_message`). Subscribe/unsubscribe confirmations
     /// and other non-message pushes are skipped.

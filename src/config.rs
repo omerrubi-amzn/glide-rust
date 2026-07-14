@@ -425,6 +425,11 @@ pub struct GlideClientConfiguration {
     /// under [`TlsConfig::SecureTls`]. Lowered into
     /// `ConnectionRequest::root_certs`. Empty = use the system trust store.
     pub root_certs: Vec<Vec<u8>>,
+    /// Client certificate (PEM bytes) for **mutual TLS**. Set together with
+    /// [`Self::client_key`] via [`Self::client_identity`].
+    pub client_cert: Option<Vec<u8>>,
+    /// Client private key (PEM bytes) for **mutual TLS**.
+    pub client_key: Option<Vec<u8>>,
 }
 
 impl GlideClientConfiguration {
@@ -446,7 +451,59 @@ impl GlideClientConfiguration {
             pubsub_subscriptions: None,
             force_pubsub_channel: false,
             root_certs: Vec::new(),
+            client_cert: None,
+            client_key: None,
         }
+    }
+
+    /// Build a configuration from a Redis connection URL, using the exact URL
+    /// semantics of redis-rs (`redis://` and `rediss://`, with
+    /// `[user][:password@]host[:port][/db]`):
+    ///
+    /// ```
+    /// use glide::GlideClientConfiguration;
+    /// let cfg = GlideClientConfiguration::from_url("redis://user:pass@localhost:6379/2").unwrap();
+    /// assert_eq!(cfg.database_id, 2);
+    /// ```
+    ///
+    /// `rediss://` enables TLS with full verification;
+    /// `rediss://…/#insecure` disables certificate verification, as in
+    /// redis-rs. Unix-socket URLs are not supported by glide-core and return
+    /// a configuration error.
+    pub fn from_url(url: &str) -> crate::error::Result<Self> {
+        Self::from_connection_info(url)
+    }
+
+    /// Build a configuration from anything implementing redis-rs's
+    /// [`redis::IntoConnectionInfo`] (a URL string, or a prebuilt
+    /// [`redis::ConnectionInfo`]).
+    pub fn from_connection_info<T: redis::IntoConnectionInfo>(
+        info: T,
+    ) -> crate::error::Result<Self> {
+        let info = info
+            .into_connection_info()
+            .map_err(|e| crate::error::GlideError::Configuration(e.to_string()))?;
+        let (address, tls) = split_connection_addr(info.addr)?;
+        let mut cfg = Self::new(vec![address]).tls(tls);
+        cfg.database_id = info.redis.db;
+        cfg.protocol = from_redis_protocol(info.redis.protocol);
+        cfg.client_name = info.redis.client_name;
+        cfg.credentials = credentials_from_info(info.redis.username, info.redis.password);
+        Ok(cfg)
+    }
+
+    /// Set a client certificate + private key (both PEM) for **mutual TLS**.
+    /// The server must be configured to require/verify client certificates.
+    /// Only meaningful together with [`TlsConfig::SecureTls`].
+    #[must_use]
+    pub fn client_identity(
+        mut self,
+        cert_pem: impl Into<Vec<u8>>,
+        key_pem: impl Into<Vec<u8>>,
+    ) -> Self {
+        self.client_cert = Some(cert_pem.into());
+        self.client_key = Some(key_pem.into());
+        self
     }
 
     /// Configure for a single `host:port`.
@@ -553,6 +610,10 @@ impl GlideClientConfiguration {
         );
         req.cluster_mode_enabled = false;
         req.database_id = self.database_id;
+        if let (Some(cert), Some(key)) = (&self.client_cert, &self.client_key) {
+            req.client_cert = cert.clone();
+            req.client_key = key.clone();
+        }
         if let Some(subs) = &self.pubsub_subscriptions {
             req.pubsub_subscriptions = Some(subs.to_core());
         }
@@ -599,9 +660,76 @@ pub struct GlideClusterClientConfiguration {
     /// under [`TlsConfig::SecureTls`]. Lowered into
     /// `ConnectionRequest::root_certs`. Empty = use the system trust store.
     pub root_certs: Vec<Vec<u8>>,
+    /// Client certificate (PEM bytes) for **mutual TLS**. Set together with
+    /// [`Self::client_key`] via [`Self::client_identity`].
+    pub client_cert: Option<Vec<u8>>,
+    /// Client private key (PEM bytes) for **mutual TLS**.
+    pub client_key: Option<Vec<u8>>,
 }
 
 impl GlideClusterClientConfiguration {
+    /// Build a cluster configuration from one or more Redis connection URLs
+    /// (seed nodes), using the exact URL semantics of redis-rs
+    /// (`ClusterClient::new(initial_nodes)` accepts the same URLs):
+    ///
+    /// ```
+    /// use glide::GlideClusterClientConfiguration;
+    /// let cfg = GlideClusterClientConfiguration::from_urls([
+    ///     "redis://n1:7000",
+    ///     "redis://n2:7001",
+    /// ]).unwrap();
+    /// assert_eq!(cfg.addresses.len(), 2);
+    /// ```
+    ///
+    /// Credentials / protocol / client-name are taken from the **first** URL
+    /// (they must be identical across nodes, as in redis-rs). A URL selecting a
+    /// non-zero database is rejected — clusters only support database 0.
+    pub fn from_urls<T: redis::IntoConnectionInfo>(
+        urls: impl IntoIterator<Item = T>,
+    ) -> crate::error::Result<Self> {
+        let mut addresses = Vec::new();
+        let mut first: Option<(TlsConfig, redis::RedisConnectionInfo)> = None;
+        for url in urls {
+            let info = url
+                .into_connection_info()
+                .map_err(|e| crate::error::GlideError::Configuration(e.to_string()))?;
+            let (address, tls) = split_connection_addr(info.addr)?;
+            addresses.push(address);
+            if first.is_none() {
+                first = Some((tls, info.redis));
+            }
+        }
+        let Some((tls, redis_info)) = first else {
+            return Err(crate::error::GlideError::Configuration(
+                "at least one node URL is required".into(),
+            ));
+        };
+        if redis_info.db != 0 {
+            return Err(crate::error::GlideError::Configuration(
+                "cluster deployments only support database 0".into(),
+            ));
+        }
+        let mut cfg = Self::new(addresses).tls(tls);
+        cfg.protocol = from_redis_protocol(redis_info.protocol);
+        cfg.client_name = redis_info.client_name;
+        cfg.credentials = credentials_from_info(redis_info.username, redis_info.password);
+        Ok(cfg)
+    }
+
+    /// Set a client certificate + private key (both PEM) for **mutual TLS**.
+    /// The server must be configured to require/verify client certificates.
+    /// Only meaningful together with [`TlsConfig::SecureTls`].
+    #[must_use]
+    pub fn client_identity(
+        mut self,
+        cert_pem: impl Into<Vec<u8>>,
+        key_pem: impl Into<Vec<u8>>,
+    ) -> Self {
+        self.client_cert = Some(cert_pem.into());
+        self.client_key = Some(key_pem.into());
+        self
+    }
+
     /// Create a cluster configuration for the given addresses.
     pub fn new(addresses: Vec<NodeAddress>) -> Self {
         GlideClusterClientConfiguration {
@@ -620,6 +748,8 @@ impl GlideClusterClientConfiguration {
             pubsub_subscriptions: None,
             force_pubsub_channel: false,
             root_certs: Vec::new(),
+            client_cert: None,
+            client_key: None,
         }
     }
 
@@ -725,10 +855,65 @@ impl GlideClusterClientConfiguration {
         );
         req.cluster_mode_enabled = true;
         req.periodic_checks = Some(self.periodic_checks.into());
+        if let (Some(cert), Some(key)) = (&self.client_cert, &self.client_key) {
+            req.client_cert = cert.clone();
+            req.client_key = key.clone();
+        }
         if let Some(subs) = &self.pubsub_subscriptions {
             req.pubsub_subscriptions = Some(subs.to_core());
         }
         req
+    }
+}
+
+/// Map a redis-rs [`redis::ConnectionAddr`] to our address + TLS mode.
+fn split_connection_addr(
+    addr: redis::ConnectionAddr,
+) -> crate::error::Result<(NodeAddress, TlsConfig)> {
+    match addr {
+        redis::ConnectionAddr::Tcp(host, port) => {
+            Ok((NodeAddress::new(host, port), TlsConfig::NoTls))
+        }
+        redis::ConnectionAddr::TcpTls {
+            host,
+            port,
+            insecure,
+            ..
+        } => {
+            let tls = if insecure {
+                TlsConfig::InsecureTls
+            } else {
+                TlsConfig::SecureTls
+            };
+            Ok((NodeAddress::new(host, port), tls))
+        }
+        redis::ConnectionAddr::Unix(_) => Err(crate::error::GlideError::Configuration(
+            "unix-socket connections are not supported by glide-core".into(),
+        )),
+    }
+}
+
+/// Map redis-rs's protocol enum to ours.
+fn from_redis_protocol(p: redis::ProtocolVersion) -> ProtocolVersion {
+    match p {
+        redis::ProtocolVersion::RESP2 => ProtocolVersion::RESP2,
+        redis::ProtocolVersion::RESP3 => ProtocolVersion::RESP3,
+    }
+}
+
+/// Build [`ServerCredentials`] from URL-provided username/password (either may
+/// be absent; `redis://:pass@host` yields password-only credentials).
+fn credentials_from_info(
+    username: Option<String>,
+    password: Option<String>,
+) -> Option<ServerCredentials> {
+    match (username, password) {
+        (None, None) => None,
+        (username, password) => Some(ServerCredentials {
+            username,
+            password,
+            iam_config: None,
+        }),
     }
 }
 
@@ -1531,5 +1716,100 @@ mod tests {
         let auth = req.authentication_info.expect("auth set");
         assert!(auth.username.is_none());
         assert_eq!(auth.password.as_deref(), Some("p"));
+    }
+
+    // ---- redis-rs URL parity (`from_url` / `from_urls`) ----
+
+    #[test]
+    fn from_url_basic() {
+        let cfg = GlideClientConfiguration::from_url("redis://localhost:6380").unwrap();
+        assert_eq!(cfg.addresses.len(), 1);
+        assert_eq!(cfg.addresses[0].host, "localhost");
+        assert_eq!(cfg.addresses[0].port, 6380);
+        assert_eq!(cfg.tls, TlsConfig::NoTls);
+        assert_eq!(cfg.database_id, 0);
+        assert!(cfg.credentials.is_none());
+    }
+
+    #[test]
+    fn from_url_default_port_and_db() {
+        let cfg = GlideClientConfiguration::from_url("redis://example.com/3").unwrap();
+        assert_eq!(cfg.addresses[0].port, 6379);
+        assert_eq!(cfg.database_id, 3);
+    }
+
+    #[test]
+    fn from_url_credentials() {
+        let cfg = GlideClientConfiguration::from_url("redis://user:secret@h:1234").unwrap();
+        let creds = cfg.credentials.expect("credentials parsed");
+        assert_eq!(creds.username.as_deref(), Some("user"));
+        assert_eq!(creds.password.as_deref(), Some("secret"));
+
+        // Password-only (empty username) form.
+        let cfg = GlideClientConfiguration::from_url("redis://:secret@h:1234").unwrap();
+        let creds = cfg.credentials.expect("credentials parsed");
+        assert!(creds.username.is_none());
+        assert_eq!(creds.password.as_deref(), Some("secret"));
+    }
+
+    #[test]
+    fn from_url_tls_schemes() {
+        let cfg = GlideClientConfiguration::from_url("rediss://secure-host:6379").unwrap();
+        assert_eq!(cfg.tls, TlsConfig::SecureTls);
+
+        let cfg =
+            GlideClientConfiguration::from_url("rediss://secure-host:6379/#insecure").unwrap();
+        assert_eq!(cfg.tls, TlsConfig::InsecureTls);
+    }
+
+    #[test]
+    fn from_url_invalid_rejected() {
+        assert!(GlideClientConfiguration::from_url("not a url").is_err());
+        assert!(GlideClientConfiguration::from_url("http://host").is_err());
+        assert!(GlideClientConfiguration::from_url("redis+unix:///tmp/redis.sock").is_err());
+    }
+
+    #[test]
+    fn from_urls_cluster_multiple_seeds() {
+        let cfg =
+            GlideClusterClientConfiguration::from_urls(["redis://n1:7000", "redis://n2:7001"])
+                .unwrap();
+        assert_eq!(cfg.addresses.len(), 2);
+        assert_eq!(cfg.addresses[1].host, "n2");
+        assert_eq!(cfg.addresses[1].port, 7001);
+    }
+
+    #[test]
+    fn from_urls_cluster_rejects_db_and_empty() {
+        assert!(GlideClusterClientConfiguration::from_urls(["redis://n1:7000/5"]).is_err());
+        assert!(GlideClusterClientConfiguration::from_urls(Vec::<&str>::new()).is_err());
+    }
+
+    // ---- mutual TLS lowering ----
+
+    #[test]
+    fn client_identity_lowered_into_request() {
+        let cert = b"-----BEGIN CERTIFICATE-----".to_vec();
+        let key = b"-----BEGIN PRIVATE KEY-----".to_vec();
+        let req = GlideClientConfiguration::with_address("h", 6379)
+            .tls(TlsConfig::SecureTls)
+            .client_identity(cert.clone(), key.clone())
+            .to_request();
+        assert_eq!(req.client_cert, cert);
+        assert_eq!(req.client_key, key);
+
+        let req = GlideClusterClientConfiguration::with_address("h", 7000)
+            .tls(TlsConfig::SecureTls)
+            .client_identity(cert.clone(), key.clone())
+            .to_request();
+        assert_eq!(req.client_cert, cert);
+        assert_eq!(req.client_key, key);
+    }
+
+    #[test]
+    fn no_client_identity_leaves_request_empty() {
+        let req = GlideClientConfiguration::with_address("h", 6379).to_request();
+        assert!(req.client_cert.is_empty());
+        assert!(req.client_key.is_empty());
     }
 }

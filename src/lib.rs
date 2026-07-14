@@ -10,6 +10,7 @@ pub mod config;
 pub mod error;
 pub mod executor;
 pub mod routes;
+pub mod script;
 pub mod telemetry;
 pub mod value;
 
@@ -80,10 +81,22 @@ pub use redis::Value;
 
 /// The redis-rs typed command trait, implemented by both GLIDE clients.
 pub use redis::AsyncCommands;
+/// The redis-rs **blocking** typed command trait, implemented by the sync
+/// clients ([`sync::SyncGlideClient`] / [`sync::SyncGlideClusterClient`]).
+#[cfg(feature = "sync")]
+pub use redis::Commands;
+/// redis-rs connection-description types, accepted by
+/// [`GlideClientConfiguration::from_connection_info`] and
+/// [`GlideClusterClientConfiguration::from_urls`].
+pub use redis::{ConnectionAddr, ConnectionInfo, IntoConnectionInfo};
+/// Argument types appearing in redis-rs command signatures (`lmpop`, `lpos`, …).
+pub use redis::{Direction, LposOptions};
 /// redis-rs error and conversion types, for code ported from redis-rs.
 pub use redis::{ErrorKind, FromRedisValue, RedisError, RedisResult, ToRedisArgs, cmd};
 /// redis-rs pipeline / transaction support (`pipe()`, `Pipeline::query_async`).
 pub use redis::{Pipeline, pipe};
+/// Lua script helper with the redis-rs `Script` API shape (clean-room impl).
+pub use script::{Script, ScriptInvocation};
 
 /// Re-export `bytes::Bytes` — the byte-string type returned by binary-safe commands.
 pub use bytes::Bytes;
