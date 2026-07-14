@@ -4,6 +4,8 @@
 
 pub mod options;
 
+pub mod core;
+
 pub mod bitmap;
 pub mod connection_management;
 pub mod ft;

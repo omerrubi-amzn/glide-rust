@@ -404,9 +404,9 @@ impl_sync_connection_like!(SyncGlideClusterClient, |_c: &SyncGlideClusterClient|
 
 macro_rules! impl_sync_owned_send {
     ($sync_ty:ty) => {
-        impl crate::compat_commands::Commands for $sync_ty {
+        impl crate::commands::core::Commands for $sync_ty {
             fn glide_send_owned_sync(&self, cmd: redis::Cmd) -> redis::RedisResult<Value> {
-                runtime().block_on(crate::compat_commands::AsyncCommands::glide_send_owned(
+                runtime().block_on(crate::commands::core::AsyncCommands::glide_send_owned(
                     &self.inner,
                     cmd,
                 ))

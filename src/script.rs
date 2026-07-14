@@ -21,7 +21,7 @@
 //! [`crate::GlideClusterClient`]); blocking methods work with any
 //! [`redis::ConnectionLike`] (the sync clients).
 
-use crate::compat_commands::AsyncCommands;
+use crate::commands::core::AsyncCommands;
 use redis::{ErrorKind, FromRedisValue, RedisResult, ToRedisArgs, cmd};
 
 /// A cached Lua script with its SHA-1 hash, mirroring redis-rs's `Script`.
@@ -87,7 +87,7 @@ impl Script {
     /// Invoke the script without keys or args on a **blocking** connection
     /// ([`crate::sync::SyncGlideClient`] / [`crate::sync::SyncGlideClusterClient`]).
     #[cfg(feature = "sync")]
-    pub fn invoke<C: crate::compat_commands::Commands, T: FromRedisValue>(
+    pub fn invoke<C: crate::commands::core::Commands, T: FromRedisValue>(
         &self,
         con: &C,
     ) -> RedisResult<T> {
@@ -105,7 +105,7 @@ impl Script {
     /// Load the script into the server's script cache (`SCRIPT LOAD`) on a
     /// **blocking** connection; returns the SHA-1 hash.
     #[cfg(feature = "sync")]
-    pub fn load<C: crate::compat_commands::Commands>(&self, con: &C) -> RedisResult<String> {
+    pub fn load<C: crate::commands::core::Commands>(&self, con: &C) -> RedisResult<String> {
         let mut load = cmd("SCRIPT");
         load.arg("LOAD").arg(self.code.as_bytes());
         redis::from_owned_redis_value(con.glide_send_owned_sync(load)?)
@@ -173,7 +173,7 @@ impl ScriptInvocation<'_> {
     /// ([`crate::sync::SyncGlideClient`] / [`crate::sync::SyncGlideClusterClient`]):
     /// `EVALSHA` first, transparent `EVAL` fallback on `NOSCRIPT`.
     #[cfg(feature = "sync")]
-    pub fn invoke<C: crate::compat_commands::Commands, T: FromRedisValue>(
+    pub fn invoke<C: crate::commands::core::Commands, T: FromRedisValue>(
         &self,
         con: &C,
     ) -> RedisResult<T> {

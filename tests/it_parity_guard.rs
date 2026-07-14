@@ -1,11 +1,12 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
-//! Guards for the generated `src/compat_commands.rs`:
-//!  * `compat_commands_matches_fork` — re-runs the generator and diffs its
-//!    output against the committed file, catching drift after a fork-rev bump.
-//!    Skips gracefully when Python or the fork checkout is unavailable (same
-//!    posture the live server tests use).
-//!  * `fork_trait_escape_path_*` — locks the `feat!` compatibility promise that
-//!    the *literal* fork traits (`glide::redis::AsyncCommands` / `Commands`)
+//! Parity guards for the unified command table (`src/commands/core.rs`):
+//!  * `command_table_matches_fork` — runs `tools/verify_redis_parity.py`,
+//!    which compares every method signature in our hand-maintained table
+//!    against the vendored redis-rs fork's `implement_commands!` table
+//!    (names, generic order, argument lists). Skips gracefully when Python
+//!    or the fork checkout is unavailable (same posture as the live tests).
+//!  * `fork_trait_escape_path_*` — locks the compatibility promise that the
+//!    *literal* fork traits (`glide::redis::AsyncCommands` / `Commands`)
 //!    still work on the clients, including generic code bounded on them.
 
 mod common;
@@ -13,13 +14,13 @@ mod common;
 use std::path::Path;
 use std::process::Command;
 
-/// Drift guard: the committed generated file must equal a fresh generation.
+/// Signature-parity guard: our table must match the fork's, method for method.
 #[test]
-fn compat_commands_matches_fork() {
+fn command_table_matches_fork() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let generator = Path::new(manifest_dir).join("tools/gen_compat_commands.py");
-    if !generator.exists() {
-        eprintln!("SKIP: generator not found");
+    let verifier = Path::new(manifest_dir).join("tools/verify_redis_parity.py");
+    if !verifier.exists() {
+        eprintln!("SKIP: verifier not found");
         return;
     }
     let python = ["python3", "python"]
@@ -29,36 +30,22 @@ fn compat_commands_matches_fork() {
         eprintln!("SKIP: no python interpreter available");
         return;
     };
-
-    let committed = Path::new(manifest_dir).join("src/compat_commands.rs");
-    let committed_src = std::fs::read_to_string(&committed).expect("read committed file");
-
-    // Generate into a temp copy so we never disturb the tree, then restore.
-    let backup = std::fs::read_to_string(&committed).expect("backup");
     let out = Command::new(python)
-        .arg(&generator)
+        .arg(&verifier)
         .current_dir(manifest_dir)
         .output()
-        .expect("run generator");
-    let regenerated = std::fs::read_to_string(&committed).expect("read regenerated");
-    // Restore the committed content regardless of outcome.
-    std::fs::write(&committed, &backup).expect("restore committed file");
-
+        .expect("run verifier");
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
-        // Fork checkout not resolvable (e.g. cargo cache evicted) — skip, don't fail.
-        if stderr.contains("could not resolve") || stderr.contains("cargo metadata") {
+        if stderr.contains("could not resolve") {
             eprintln!("SKIP: fork checkout unavailable:\n{stderr}");
             return;
         }
-        panic!("generator failed:\n{stderr}");
+        panic!(
+            "command table diverges from the fork:\n{}\n{stderr}",
+            String::from_utf8_lossy(&out.stdout)
+        );
     }
-
-    assert_eq!(
-        committed_src, regenerated,
-        "src/compat_commands.rs is stale — run `python3 tools/gen_compat_commands.py` \
-         (see DEVELOPER.md 'Regenerating compat_commands.rs')"
-    );
 }
 
 // ---- fork-trait escape path (P2-R2-1) ----------------------------------------

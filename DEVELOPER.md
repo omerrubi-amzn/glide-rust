@@ -90,24 +90,26 @@ Because the client negotiates **RESP3** by default, replies may arrive as
 Prefer the helpers in `src/value.rs`, which already normalize these, and add new
 shapes there rather than in individual commands.
 
-## Regenerating `compat_commands.rs`
+## Maintaining the unified command table
 
-`src/compat_commands.rs` is **generated** — do not hand-edit it. It provides
-the redis-rs-compatible `AsyncCommands` / `Commands` traits (owned-send, native
-copy behavior) derived from the vendored redis-rs fork's `implement_commands!`
-table. Regenerate it **whenever the pinned fork rev changes**:
+The unified `AsyncCommands` / `Commands` traits are defined by the
+**hand-maintained** command table in `src/commands/core.rs` (one
+`implement_glide_commands!` invocation; each `fn name<G: Bound>(args);` entry
+expands to both the async and the blocking method, delegating to the fork's
+`Cmd::<name>()` constructor for identical wire encoding).
+
+To add or change an entry, edit the table directly — then run the
+signature-parity guard, which compares every entry against the vendored
+redis-rs fork's `implement_commands!` table (names, generic order, argument
+lists) and fails on any divergence:
 
 ```bash
-# Resolves the fork's commands/mod.rs via `cargo metadata` (no hardcoded path)
-# and formats the output with rustfmt --edition 2024:
-python3 tools/gen_compat_commands.py
-cargo fmt --check   # must be clean; the generator already runs rustfmt
-cargo test          # the compat_commands_matches_fork drift test must pass
+python3 tools/verify_redis_parity.py   # standalone
+cargo test --test it_parity_guard      # same check as a test (skips without python/fork)
 ```
 
-The generator asserts the fork exposes exactly **151** methods; if that
-assertion fires after a rev bump, the fork's command surface changed — review
-the delta, update the count in the generator deliberately, and refresh the
-copy-parity docs and the pinned rev references (`licenses/`, `NOTICE`). The `compat_commands_matches_fork` test (in `tests/it_compat_gen.rs`)
-re-runs the generator and diffs against the committed file, skipping gracefully
-when the fork checkout is unavailable.
+When the pinned fork rev is bumped, run the verifier to see what changed in
+the fork's surface, update the table deliberately, and refresh the pinned rev
+references (`licenses/`, `NOTICE`). Commands beyond redis-rs's surface belong
+in the per-family extension traits (`src/commands/<family>.rs`), not in the
+table.

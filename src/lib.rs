@@ -5,7 +5,6 @@
 
 pub mod client;
 pub mod commands;
-pub mod compat_commands;
 pub mod config;
 pub mod error;
 pub mod executor;
@@ -84,12 +83,12 @@ pub use redis::Value;
 /// identical to the fork's `redis::AsyncCommands`, which remains available at
 /// [`redis::AsyncCommands`] for code needing the
 /// literal fork trait.
-pub use compat_commands::AsyncCommands;
+pub use commands::core::AsyncCommands;
 /// The redis-rs **blocking** typed command trait — GLIDE-owned drop-in with
 /// native copy behavior (see [`AsyncCommands`]). The fork's trait remains at
 /// [`redis::Commands`].
 #[cfg(feature = "sync")]
-pub use compat_commands::Commands;
+pub use commands::core::Commands;
 /// The **whole vendored `redis` crate**, re-exported. Downstream crates cannot
 /// name the git-dep fork directly, and the curated flat re-exports above are
 /// deliberately incomplete where names collide with other exported types

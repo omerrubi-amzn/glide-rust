@@ -38,9 +38,12 @@ additionally accepts a `Route` on command variants (via dedicated
 ## Command surface
 
 The **unified command API** is redis-rs-shaped: `glide::AsyncCommands` (async)
-and `glide::Commands` (blocking) are **generated** from the vendored redis-rs
-fork's `implement_commands!` table (`src/compat_commands.rs`, built by
-`tools/gen_compat_commands.py`). Method names, generic parameter order, and
+and `glide::Commands` (blocking) are defined by a **hand-maintained command
+table** (`src/commands/core.rs`, one `implement_glide_commands!` macro
+invocation — the same pattern redis-rs itself uses) mirroring the vendored
+fork's `implement_commands!` table, enforced by a signature-parity guard
+(`tools/verify_redis_parity.py`, run by `tests/it_parity_guard.rs`).
+Method names, generic parameter order, and
 wire encoding match redis-rs exactly (methods delegate to the fork's own
 `Cmd::<name>()` constructors), with two deliberate deviations: methods take
 `&self` (the clients are cheaply cloneable handles), and commands are handed
