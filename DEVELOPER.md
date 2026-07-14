@@ -89,3 +89,26 @@ Because the client negotiates **RESP3** by default, replies may arrive as
 `Value::Map`, `Value::Double`, `Value::Boolean`, or `Value::VerbatimString`.
 Prefer the helpers in `src/value.rs`, which already normalize these, and add new
 shapes there rather than in individual commands.
+
+## Regenerating `compat_commands.rs`
+
+`src/compat_commands.rs` is **generated** — do not hand-edit it. It provides
+the redis-rs-compatible `AsyncCommands` / `Commands` traits (owned-send, native
+copy behavior) derived from the vendored redis-rs fork's `implement_commands!`
+table. Regenerate it **whenever the pinned fork rev changes**:
+
+```bash
+# Resolves the fork's commands/mod.rs via `cargo metadata` (no hardcoded path)
+# and formats the output with rustfmt --edition 2024:
+python3 tools/gen_compat_commands.py
+cargo fmt --check   # must be clean; the generator already runs rustfmt
+cargo test          # the compat_commands_matches_fork drift test must pass
+```
+
+The generator asserts the fork exposes exactly **151** methods; if that
+assertion fires after a rev bump, the fork's command surface changed — review
+the delta, update the count in the generator deliberately, and refresh the
+copy-parity docs and the pinned rev references (`PARITY.md`, `licenses/`,
+`NOTICE`). The `compat_commands_matches_fork` test (in `tests/it_compat_gen.rs`)
+re-runs the generator and diffs against the committed file, skipping gracefully
+when the fork checkout is unavailable.

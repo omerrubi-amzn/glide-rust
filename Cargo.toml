@@ -1,6 +1,6 @@
 [package]
 name = "glide-rust"
-version = "0.1.0"
+version = "0.2.0"
 # edition 2024 to match the upstream valkey-glide Rust crates (glide-core, ffi,
 # python/glide-async, logger_core). No `rust-version` (MSRV) is declared, matching
 # upstream — Rust is an internal build detail, not a published-version surface.

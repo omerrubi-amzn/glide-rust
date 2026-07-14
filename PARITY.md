@@ -3,8 +3,9 @@
 **Goal:** complete API parity with redis-rs so customers can migrate easily between the
 two clients.
 
-**Reference:** the **vendored redis-rs fork, version 0.25.2** (MIT-licensed,
-*pre*-relicense) inside `valkey-io/valkey-glide` at the pinned rev this crate builds
+**Reference:** the **vendored redis-rs fork, version 0.25.2**
+(**BSD-3-Clause**, see `licenses/LICENSE.redis-rs` and `NOTICE`) inside
+`valkey-io/valkey-glide` at the pinned rev this crate builds
 against (`052ae4ef62b3ab055ce991d74ea27a5cf1762a20`), i.e. the same `redis` crate
 instance we already link. We must **not** compare against (or copy from) upstream
 redis-rs releases published after its licensing change.
@@ -261,6 +262,11 @@ plus curated flat re-exports), which makes the fork's public API part of
 rev is a potentially breaking change** of glide-rust and must be treated as
 such under semver (major/minor accordingly), even when no wrapper code
 changes.
+
+The owned-send trait swap (`glide::AsyncCommands`/`Commands` becoming
+GLIDE-owned drop-ins instead of fork re-exports) is itself a breaking change
+of this crate's public API; under the pre-1.0 convention it lands as the
+`0.2.0` minor bump.
 
 ### Open decisions
 

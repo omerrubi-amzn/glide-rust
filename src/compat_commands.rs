@@ -2,7 +2,8 @@
 //
 // The method table (names, signatures, and doc comments) is derived from the
 // vendored redis-rs fork's `implement_commands!` invocation
-// (`redis` crate v0.25.2, MIT license, valkey-io/valkey-glide rev 052ae4e).
+// (`redis` crate v0.25.2, BSD-3-Clause license, valkey-io/valkey-glide rev
+// 052ae4e; see licenses/LICENSE.redis-rs and NOTICE).
 // Each method delegates to the fork's generated `Cmd::<name>()` constructor,
 // so the wire encoding is byte-identical to redis-rs.
 //
@@ -116,7 +117,6 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
     #[allow(deprecated)]
     #[deprecated(since = "0.22.4", note = "Renamed to mset() to reflect Redis name")]
     #[inline]
-    #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn set_multiple<'a, K: ToRedisArgs + Send + Sync + 'a, V: ToRedisArgs + Send + Sync + 'a, RV>(
         &'a mut self,
@@ -2816,6 +2816,11 @@ pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sized {
 /// Drop-in for the fork's `redis::Commands` — see [`AsyncCommands`].
 /// Implemented by [`crate::sync::SyncGlideClient`] and
 /// [`crate::sync::SyncGlideClusterClient`].
+///
+/// These methods block on the internal runtime and **must not be called from
+/// within an async context** (doing so panics with tokio's "cannot block the
+/// current thread from within a runtime"); use [`AsyncCommands`] on the async
+/// clients there instead.
 #[cfg(feature = "sync")]
 pub trait Commands: redis::ConnectionLike + Sized {
     /// Send an already-built command **by value** (no clone). This is the
@@ -2875,7 +2880,6 @@ pub trait Commands: redis::ConnectionLike + Sized {
     #[allow(deprecated)]
     #[deprecated(since = "0.22.4", note = "Renamed to mset() to reflect Redis name")]
     #[inline]
-    #[allow(deprecated)]
     #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]
     fn set_multiple<'a, K: ToRedisArgs, V: ToRedisArgs, RV: FromRedisValue>(
         &mut self,

@@ -6,8 +6,10 @@
 
 mod common;
 
-use glide::sync::SyncGlideClient;
-use glide::{AsyncCommands, Commands, GlideClientConfiguration, Script, cmd};
+use glide::sync::{SyncGlideClient, SyncGlideClusterClient};
+use glide::{
+    AsyncCommands, Commands, GlideClientConfiguration, GlideClusterClientConfiguration, Script, cmd,
+};
 use std::collections::HashMap;
 
 // ---- Script (clean-room redis-rs Script type) ---------------------------------
@@ -371,3 +373,81 @@ matrix_test!(lmpop_typed_method, c, {
     assert_eq!(popped.0, k);
     assert_eq!(popped.1, vec!["a".to_string(), "b".to_string()]);
 });
+
+// ---- cluster: from_urls, sync Commands, NOSCRIPT fallback (P2-R2-6) -----------
+
+#[tokio::test]
+async fn cluster_from_urls_connects_and_routes() {
+    let cluster = cluster_or_skip!();
+    // Build seed-node URLs from the real cluster's primaries and connect via
+    // the redis-rs-style URL constructor.
+    let urls: Vec<String> = cluster
+        .primary_ports
+        .iter()
+        .map(|p| format!("redis://127.0.0.1:{p}"))
+        .collect();
+    let cfg = GlideClusterClientConfiguration::from_urls(urls.iter().map(String::as_str)).unwrap();
+    assert_eq!(cfg.addresses.len(), cluster.primary_ports.len());
+    let mut c = match glide::GlideClusterClient::connect(cfg).await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("SKIP: cluster connect failed: {e}");
+            return;
+        }
+    };
+    // Keys hash to different slots; the compat typed API routes each.
+    for i in 0..20 {
+        let k = format!("rrs_cluster_url:{i}");
+        AsyncCommands::set::<_, _, ()>(&mut c, &k, i).await.unwrap();
+        let v: i64 = AsyncCommands::get(&mut c, &k).await.unwrap();
+        assert_eq!(v, i);
+    }
+}
+
+#[test]
+fn sync_cluster_commands_trait() {
+    let cluster = cluster_or_skip!();
+    let mut c = match SyncGlideClusterClient::connect(
+        GlideClusterClientConfiguration::with_address("127.0.0.1", cluster.seed_port()),
+    ) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("SKIP: sync cluster connect failed: {e}");
+            return;
+        }
+    };
+    // Blocking redis-rs typed API on the cluster client.
+    let k = format!("rrs_sync_cluster:{}", common::key("k"));
+    Commands::set::<_, _, ()>(&mut c, &k, 123).unwrap();
+    let v: i64 = Commands::get(&mut c, &k).unwrap();
+    assert_eq!(v, 123);
+    let v: i64 = Commands::incr(&mut c, &k, 7).unwrap();
+    assert_eq!(v, 130);
+}
+
+#[tokio::test]
+async fn cluster_script_noscript_fallback() {
+    // Keyless scripts route to a random node, so EVALSHA can miss on whichever
+    // node it lands on — exercising the transparent EVAL fallback in cluster
+    // mode. Flush all nodes first to guarantee the miss, then invoke enough
+    // times to hit multiple nodes.
+    let cluster = cluster_or_skip!();
+    let mut c = match cluster.client().await {
+        Some(c) => c,
+        None => {
+            eprintln!("SKIP: cluster client connect failed");
+            return;
+        }
+    };
+    let _: () = cmd("SCRIPT")
+        .arg("FLUSH")
+        .arg("SYNC")
+        .query_async(&mut c)
+        .await
+        .unwrap_or(());
+    let script = Script::new("return 40 + 2");
+    for _ in 0..10 {
+        let v: i64 = script.invoke_async(&mut c).await.unwrap();
+        assert_eq!(v, 42);
+    }
+}

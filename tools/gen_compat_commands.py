@@ -8,11 +8,42 @@ compatible) but delegates to the fork's generated `Cmd::<name>()` constructor
 (identical wire encoding) and sends the built Cmd BY VALUE through
 glide_send_owned / glide_send_owned_sync, avoiding the &Cmd -> clone tax of
 the redis-rs ConnectionLike path.
+
+Usage:
+    python3 tools/gen_compat_commands.py            # resolve fork via cargo metadata
+    python3 tools/gen_compat_commands.py /path/to/redis-rs/redis/src/commands/mod.rs
+
+The output is formatted with `rustfmt` (edition 2024) so it lands
+byte-identical to `cargo fmt`. See DEVELOPER.md "Regenerating compat_commands.rs".
 """
+import json
 import re
+import shutil
+import subprocess
 import sys
 
-FORK = "/home/omerrubi/.cargo/git/checkouts/valkey-glide-7602178f3dd69e53/052ae4e/glide-core/redis-rs/redis/src/commands/mod.rs"
+
+def resolve_fork_mod_rs() -> str:
+    """Locate the vendored redis fork's commands/mod.rs.
+
+    Prefer an explicit argv[1]; otherwise derive the resolved `redis` package's
+    manifest path from `cargo metadata` (no machine-specific hardcoding).
+    """
+    if len(sys.argv) > 1:
+        return sys.argv[1]
+    meta = json.loads(
+        subprocess.check_output(["cargo", "metadata", "--format-version", "1"])
+    )
+    manifests = [p["manifest_path"] for p in meta["packages"] if p["name"] == "redis"]
+    if not manifests:
+        sys.exit("could not resolve the `redis` package via cargo metadata")
+    # manifest_path is .../redis/Cargo.toml -> .../redis/src/commands/mod.rs
+    import os
+
+    return os.path.join(os.path.dirname(manifests[0]), "src", "commands", "mod.rs")
+
+
+FORK = resolve_fork_mod_rs()
 
 src = open(FORK).read()
 start = src.index("implement_commands! {")
@@ -85,7 +116,11 @@ while li < n:
     entries.append((pending_docs, pending_attrs, name, generics, arglist))
     pending_docs, pending_attrs = [], []
 
-assert 140 <= len(entries) <= 159, f"suspicious entry count: {len(entries)}"
+assert len(entries) == 151, (
+    f"expected 151 fork methods, parsed {len(entries)}. The fork's command table "
+    "changed (likely a rev bump) — review the delta and update this count "
+    "deliberately, along with the pinned rev and the copy-parity docs."
+)
 
 def method(docs, attrs, name, generics, args, is_async):
     out = []
@@ -94,7 +129,10 @@ def method(docs, attrs, name, generics, args, is_async):
     for a in attrs:
         out.append(f"    {a}")
     out.append("    #[inline]")
-    out.append("    #[allow(deprecated)]")
+    # Only add our own #[allow(deprecated)] when the fork entry did not already
+    # carry one (deprecated methods copy the fork's attribute verbatim above).
+    if not any("allow(deprecated)" in a for a in attrs):
+        out.append("    #[allow(deprecated)]")
     out.append("    #[allow(clippy::extra_unused_lifetimes, clippy::needless_lifetimes)]")
     call_args = ", ".join(a for a, _ in args)
     params = "".join(f", {a}: {t}" for a, t in args)
@@ -119,7 +157,8 @@ header = '''\
 //
 // The method table (names, signatures, and doc comments) is derived from the
 // vendored redis-rs fork's `implement_commands!` invocation
-// (`redis` crate v0.25.2, MIT license, valkey-io/valkey-glide rev 052ae4e).
+// (`redis` crate v0.25.2, BSD-3-Clause license, valkey-io/valkey-glide rev
+// 052ae4e; see licenses/LICENSE.redis-rs and NOTICE).
 // Each method delegates to the fork's generated `Cmd::<name>()` constructor,
 // so the wire encoding is byte-identical to redis-rs.
 //
@@ -170,6 +209,11 @@ sync_header = '''\
 /// Drop-in for the fork's `redis::Commands` — see [`AsyncCommands`].
 /// Implemented by [`crate::sync::SyncGlideClient`] and
 /// [`crate::sync::SyncGlideClusterClient`].
+///
+/// These methods block on the internal runtime and **must not be called from
+/// within an async context** (doing so panics with tokio's "cannot block the
+/// current thread from within a runtime"); use [`AsyncCommands`] on the async
+/// clients there instead.
 #[cfg(feature = "sync")]
 pub trait Commands: redis::ConnectionLike + Sized {
     /// Send an already-built command **by value** (no clone). This is the
@@ -376,4 +420,13 @@ for docs, attrs, name, generics, args in entries:
 out.append(scan_sync.replace("ToRedisArgsBound", "redis::ToRedisArgs"))
 out.append("}")
 open("src/compat_commands.rs", "w").write("\n".join(out) + "\n")
+
+# Format so the committed file is byte-identical to `cargo fmt` output.
+if shutil.which("rustfmt"):
+    subprocess.run(
+        ["rustfmt", "--edition", "2024", "src/compat_commands.rs"], check=True
+    )
+else:
+    print("WARNING: rustfmt not found — run `cargo fmt` before committing", file=sys.stderr)
+
 print(f"generated src/compat_commands.rs with {len(entries)} methods per trait")

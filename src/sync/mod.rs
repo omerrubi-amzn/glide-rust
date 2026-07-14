@@ -517,6 +517,11 @@ impl SyncPipelineTarget for SyncGlideClusterClient {
 /// Extension for running a redis-rs [`redis::Pipeline`] on a blocking GLIDE
 /// client with **native copy behavior** (no packed-byte round-trip).
 ///
+/// Like the rest of the sync layer, this blocks on the internal runtime and
+/// therefore **must not be called from within an async context** (doing so
+/// panics with tokio's "cannot block the current thread from within a runtime"
+/// — use [`redis::Pipeline::query_async`] on the async client instead).
+///
 /// ```no_run
 /// use glide::sync::{PipelineExt, SyncGlideClient};
 /// # fn demo(client: &SyncGlideClient) -> glide::RedisResult<()> {

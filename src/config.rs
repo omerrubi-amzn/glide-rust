@@ -722,6 +722,9 @@ impl GlideClusterClientConfiguration {
     /// across all URLs — conflicting settings are rejected with a
     /// configuration error, as in redis-rs's `ClusterClient`. A URL selecting
     /// a non-zero database is rejected — clusters only support database 0.
+    /// The RESP `protocol` is taken from the **first** URL and not
+    /// cross-validated (matching the fork, which overwrites per-node protocol
+    /// from builder params without validating it).
     pub fn from_urls<T: redis::IntoConnectionInfo>(
         urls: impl IntoIterator<Item = T>,
     ) -> crate::error::Result<Self> {
