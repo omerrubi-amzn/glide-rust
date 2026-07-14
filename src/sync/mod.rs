@@ -398,8 +398,8 @@ impl_sync_connection_like!(SyncGlideClient, |c: &SyncGlideClient| c.inner.db());
 // Cluster deployments always use database 0.
 impl_sync_connection_like!(SyncGlideClusterClient, |_c: &SyncGlideClusterClient| 0);
 
-// ---- owned-send compat traits (native copy behavior) --------------------------
-// See the async impls in `client.rs`: commands arrive **by value**, so the
+// ---- unified command API dispatch ---------------------------------------------
+// See the async impls in `client/`: commands arrive **by value**, so the
 // blocking typed API costs no `Cmd` clone and no packed-byte round-trip.
 
 macro_rules! impl_sync_owned_send {

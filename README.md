@@ -156,21 +156,20 @@ build, test, and benchmark.
 
 ## Migrating from redis-rs
 
-The complete redis-rs typed API — `AsyncCommands` / `Commands`, `Pipeline`
-(incl. atomic transactions), scan iterators, and `Script` — works on both
-clients with **exact redis-rs signatures and `RedisResult` errors**.
-Everything you need is re-exported from `glide`.
+GLIDE's command API (`glide::AsyncCommands` / `glide::Commands`) is
+**source-compatible with redis-rs**: method names, signatures, and wire
+encoding match, so existing redis-rs call sites — including `Pipeline` with
+atomic transactions, scan iterators, and `Script` — compile unchanged with
+`RedisResult` errors. Everything you need is re-exported from `glide`.
 
-`glide::AsyncCommands` / `glide::Commands` are GLIDE-owned drop-in
-replacements for the fork's traits: identical method names, signatures, and
-wire encoding (they delegate to the fork's own `Cmd` constructors), but
-commands are handed to glide-core **by value**, so a typed compat call copies
-your payload exactly as many times as the native GLIDE API — this matters for
-large values. Both clients also implement `redis::aio::ConnectionLike`
-(sync clients: the blocking `redis::ConnectionLike`), so redis-rs `Pipeline`,
-scan iterators, generic code bounded on the literal fork traits
-(`glide::redis::AsyncCommands`), and raw `cmd().query_async()` all work
-unchanged.
+Under the hood this is GLIDE, not redis-rs: every command is executed by
+glide-core (multiplexing, cluster routing, reconnection, IAM auth), handed
+over **by value** on GLIDE's zero-extra-copy path — for large values this is
+measurably cheaper than redis-rs's own dispatch. The clients also implement
+`redis::aio::ConnectionLike` (sync: the blocking `redis::ConnectionLike`),
+so redis-rs `Pipeline`, scan iterators, generic code bounded on the vendored
+fork's traits (`glide::redis::AsyncCommands`), and raw `cmd().query_async()`
+all work unchanged.
 
 ```rust,no_run
 use glide::{AsyncCommands, GlideClient, GlideClientConfiguration, Script, pipe};
@@ -200,8 +199,8 @@ let n: i64 = script.arg(41).invoke_async(&mut client).await?;
 ```
 
 Notes:
-- `glide::AsyncCommands` / `glide::Commands` are the unified command API
-  (redis-rs-shaped). GLIDE extension traits (streams, geo, Search `FT.*`,
+- `glide::AsyncCommands` / `glide::Commands` are GLIDE's command API
+  (source-compatible with redis-rs). GLIDE extension traits (streams, geo, Search `FT.*`,
   `JSON.*`, hash field-TTL, …) cover commands beyond redis-rs's surface;
   their names never collide with the unified traits, so import both freely.
 - Cluster: `GlideClusterClientConfiguration::from_urls([...])` accepts

@@ -37,7 +37,7 @@ additionally accepts a `Route` on command variants (via dedicated
 
 ## Command surface
 
-The **unified command API** is redis-rs-shaped: `glide::AsyncCommands` (async)
+**GLIDE's command API** is source-compatible with redis-rs: `glide::AsyncCommands` (async)
 and `glide::Commands` (blocking) are defined by a **hand-maintained command
 table** (`src/commands/core.rs`, one `implement_glide_commands!` macro
 invocation — the same pattern redis-rs itself uses) mirroring the vendored

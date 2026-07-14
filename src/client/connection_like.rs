@@ -1,18 +1,16 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
-//! redis-rs interoperability for the async clients.
+//! [`redis::aio::ConnectionLike`] implementations for the GLIDE clients.
 //!
-//! * [`redis::aio::ConnectionLike`] impls make the clients usable everywhere
-//!   redis-rs expects a connection object: `Pipeline::query_async`, the scan
-//!   iterators, raw `cmd().query_async()`, and generic code bounded on the
-//!   literal fork traits (`glide::redis::AsyncCommands`).
-//! * The [`crate::commands::core::AsyncCommands`] impls provide the unified
-//!   command API's owned-send dispatch (no per-call `Cmd` clone).
+//! GLIDE's own command API lives in [`crate::commands`]; these impls
+//! additionally let the clients be used anywhere a redis-rs connection object
+//! is expected — `Pipeline::query_async`, the scan iterators, raw
+//! `cmd().query_async()`, and generic code bounded on the vendored fork's
+//! traits (`glide::redis::AsyncCommands`) — easing migration from redis-rs.
 
 use super::{GlideClient, GlideClusterClient};
 use glide_core::client::Client as CoreClient;
 use redis::{Cmd, Value};
 
-// ---- redis-rs API compatibility ---------------------------------------------
 //
 // The vendored redis-rs fork blanket-implements its entire typed API over
 // `redis::aio::ConnectionLike`:
@@ -35,7 +33,7 @@ use redis::{Cmd, Value};
 /// Dispatch a redis-rs `Pipeline` through glide-core, matching the reply shape
 /// `Pipeline::query_async` expects from `req_packed_commands`: one reply per
 /// command for pipelines, and the single `EXEC` reply for atomic transactions.
-async fn compat_pipeline(
+async fn dispatch_pipeline(
     core: &mut CoreClient,
     pipeline: &redis::Pipeline,
     retry: Option<redis::PipelineRetryStrategy>,
@@ -86,7 +84,7 @@ impl redis::aio::ConnectionLike for GlideClient {
         _count: usize,
         pipeline_retry_strategy: Option<redis::PipelineRetryStrategy>,
     ) -> redis::RedisFuture<'a, Vec<Value>> {
-        Box::pin(compat_pipeline(
+        Box::pin(dispatch_pipeline(
             &mut self.inner,
             cmd,
             pipeline_retry_strategy,
@@ -121,7 +119,7 @@ impl redis::aio::ConnectionLike for GlideClusterClient {
         _count: usize,
         pipeline_retry_strategy: Option<redis::PipelineRetryStrategy>,
     ) -> redis::RedisFuture<'a, Vec<Value>> {
-        Box::pin(compat_pipeline(
+        Box::pin(dispatch_pipeline(
             &mut self.inner,
             cmd,
             pipeline_retry_strategy,
@@ -134,29 +132,5 @@ impl redis::aio::ConnectionLike for GlideClusterClient {
 
     fn is_closed(&self) -> bool {
         false
-    }
-}
-
-// ---- owned-send compat traits (native copy behavior) --------------------------
-//
-// `crate::AsyncCommands` methods build the `Cmd` themselves and hand it here
-// **by value** — unlike the `ConnectionLike` path above, no `Cmd` clone is
-// needed, so a typed compat call copies the payload exactly as many times as
-// the native GLIDE API (build + glide-core's internal owned copy).
-
-impl crate::commands::core::AsyncCommands for GlideClient {
-    fn glide_send_owned<'a>(&'a self, mut cmd: Cmd) -> redis::RedisFuture<'a, Value> {
-        // `Client` is Clone (Arc inside); operate on a cheap clone so the
-        // unified API can take `&self` — same pattern as `execute_command`.
-        let mut client = self.inner.clone();
-        Box::pin(async move { client.send_command(&mut cmd, None).await })
-    }
-}
-
-impl crate::commands::core::AsyncCommands for GlideClusterClient {
-    fn glide_send_owned<'a>(&'a self, mut cmd: Cmd) -> redis::RedisFuture<'a, Value> {
-        // Routing is decided by glide-core from the command's keys.
-        let mut client = self.inner.clone();
-        Box::pin(async move { client.send_command(&mut cmd, None).await })
     }
 }

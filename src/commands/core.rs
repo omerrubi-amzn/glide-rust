@@ -1,5 +1,5 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
-//! The unified command API: [`AsyncCommands`] and [`Commands`].
+//! GLIDE's command API: [`AsyncCommands`] and [`Commands`].
 //!
 //! One command table (below) defines both traits via the
 //! `implement_glide_commands!` macro. Entries mirror the vendored redis-rs fork's
@@ -45,10 +45,12 @@ macro_rules! implement_glide_commands {
             fn $name:ident $(<$($g:ident: $b:ident),+>)? ($($arg:ident: $ty:ty),*);
         )*
     ) => {
-        /// The **unified async command API** of this crate, redis-rs-shaped.
+        /// **GLIDE's async command API.**
         ///
-        /// See the [module docs](self) for the design. Implemented by
-        /// [`crate::GlideClient`] and [`crate::GlideClusterClient`].
+        /// Implemented by [`crate::GlideClient`] and
+        /// [`crate::GlideClusterClient`]. Method signatures are
+        /// source-compatible with redis-rs for easy migration — see the
+        /// [module docs](self).
         pub trait AsyncCommands: redis::aio::ConnectionLike + Send + Sync + Sized {
             /// Send an already-built command **by value** (no clone). This is
             /// the single required method; every typed command delegates to
@@ -162,10 +164,10 @@ macro_rules! implement_glide_commands {
         Box::pin(async move { c.iter_async(self).await })
     }        }
 
-        /// The **unified blocking command API** of this crate, redis-rs-shaped.
+        /// **GLIDE's blocking command API.**
         ///
         /// Blocking counterpart of [`AsyncCommands`] — see there and the
-        /// [module docs](self) for the design. Implemented by
+        /// [module docs](self). Implemented by
         /// [`crate::sync::SyncGlideClient`] and
         /// [`crate::sync::SyncGlideClusterClient`].
         ///

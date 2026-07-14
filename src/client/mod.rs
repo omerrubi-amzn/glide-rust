@@ -488,4 +488,27 @@ impl CommandExecutor for GlideClusterClient {
     }
 }
 
-mod redis_compat;
+mod connection_like;
+
+// ---- unified command API dispatch ---------------------------------------------
+//
+// `glide::AsyncCommands` methods build the `Cmd` themselves and hand it here
+// **by value**: one copy to build, glide-core's internal owned copy, nothing
+// else — this is the client's primary command path.
+
+impl crate::commands::core::AsyncCommands for GlideClient {
+    fn glide_send_owned<'a>(&'a self, mut cmd: Cmd) -> redis::RedisFuture<'a, Value> {
+        // `Client` is Clone (Arc inside); operate on a cheap clone so the
+        // unified API can take `&self` — same pattern as `execute_command`.
+        let mut client = self.inner.clone();
+        Box::pin(async move { client.send_command(&mut cmd, None).await })
+    }
+}
+
+impl crate::commands::core::AsyncCommands for GlideClusterClient {
+    fn glide_send_owned<'a>(&'a self, mut cmd: Cmd) -> redis::RedisFuture<'a, Value> {
+        // Routing is decided by glide-core from the command's keys.
+        let mut client = self.inner.clone();
+        Box::pin(async move { client.send_command(&mut cmd, None).await })
+    }
+}

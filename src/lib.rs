@@ -78,15 +78,13 @@ pub use redis::Value;
 // # Ok(()) }
 // ```
 
-/// The redis-rs typed command trait — GLIDE-owned drop-in with **native copy
-/// behavior** (commands sent by value, no per-call `Cmd` clone). Signature-
-/// identical to the fork's `redis::AsyncCommands`, which remains available at
-/// [`redis::AsyncCommands`] for code needing the
-/// literal fork trait.
+/// GLIDE's async command API. Signatures are source-compatible with
+/// redis-rs's `AsyncCommands` for easy migration; commands travel GLIDE's
+/// native zero-extra-copy path. The vendored fork's own trait remains
+/// available at [`redis::AsyncCommands`] for generic code bounded on it.
 pub use commands::core::AsyncCommands;
-/// The redis-rs **blocking** typed command trait — GLIDE-owned drop-in with
-/// native copy behavior (see [`AsyncCommands`]). The fork's trait remains at
-/// [`redis::Commands`].
+/// GLIDE's blocking command API (see [`AsyncCommands`]). The vendored
+/// fork's own trait remains at [`redis::Commands`].
 #[cfg(feature = "sync")]
 pub use commands::core::Commands;
 /// The **whole vendored `redis` crate**, re-exported. Downstream crates cannot

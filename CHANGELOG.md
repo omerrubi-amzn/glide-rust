@@ -8,9 +8,9 @@ All notable changes to this crate are documented here. The format is based on
 **Breaking — unified command API.** One command surface instead of two:
 
 - `glide::AsyncCommands` / `glide::Commands` are now THE command API:
-  redis-rs-shaped (names, generic order, and wire encoding match the vendored
-  fork; existing redis-rs call sites compile unchanged), generated from the
-  fork's command table, sent **by value** on the native zero-extra-copy path.
+  GLIDE's own traits, source-compatible with redis-rs (names, generic order,
+  and wire encoding match the vendored fork; existing redis-rs call sites
+  compile unchanged), sent **by value** on the native zero-extra-copy path.
   Deliberate deviations: `&self` receivers; `RedisResult` errors.
 - The duplicated native core command traits (string/hash/list/set/sorted-set/
   generic/bitmap/HyperLogLog) were **removed** where redis-rs covers the
