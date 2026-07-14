@@ -159,11 +159,13 @@ impl Default for ClusterScanCursor {
 pub struct GlideClient {
     inner: CoreClient,
     pubsub_rx: Option<PushRx>,
+    db: i64,
 }
 
 impl GlideClient {
     /// Connect using the given standalone configuration.
     pub async fn connect(config: GlideClientConfiguration) -> Result<Self> {
+        let db = config.database_id;
         let request = config.to_request();
         let has_subs = config
             .pubsub_subscriptions
@@ -173,7 +175,11 @@ impl GlideClient {
         let inner = CoreClient::new(request, sender)
             .await
             .map_err(GlideError::from)?;
-        Ok(GlideClient { inner, pubsub_rx })
+        Ok(GlideClient {
+            inner,
+            pubsub_rx,
+            db,
+        })
     }
 
     /// Access the underlying `glide-core` client (advanced use).
@@ -500,5 +506,115 @@ impl CommandExecutor for GlideClusterClient {
             .send_command(&mut cmd, routing)
             .await
             .map_err(GlideError::from)
+    }
+}
+
+// ---- redis-rs API compatibility ---------------------------------------------
+//
+// The vendored redis-rs fork blanket-implements its entire typed API over
+// `redis::aio::ConnectionLike`:
+//
+//     impl<T> AsyncCommands for T where T: crate::aio::ConnectionLike + Send + Sized {}
+//
+// Implementing that trait directly on our clients makes them **first-class
+// redis-rs connection objects**: `redis::AsyncCommands` (every typed method,
+// generic over `RV: FromRedisValue`, returning `RedisResult<RV>`),
+// `Pipeline::query_async` (pipelined and MULTI/EXEC atomic), and the `scan*`
+// async iterators all work on `GlideClient` / `GlideClusterClient` as-is —
+// while every request is still executed by glide-core (multiplexing, cluster
+// routing, reconnection, IAM/password refresh, timeouts).
+//
+// Note: our native command traits (`StringCommands`, ...) and redis-rs's
+// `AsyncCommands` share method names (`get`, `set`, ...). Import only the
+// trait family you use in a given scope; if both are imported, disambiguate
+// with fully-qualified syntax.
+
+/// Dispatch a redis-rs `Pipeline` through glide-core, matching the reply shape
+/// `Pipeline::query_async` expects from `req_packed_commands`: one reply per
+/// command for pipelines, and the single `EXEC` reply for atomic transactions.
+async fn compat_pipeline(
+    core: &mut CoreClient,
+    pipeline: &redis::Pipeline,
+    retry: Option<redis::PipelineRetryStrategy>,
+) -> redis::RedisResult<Vec<Value>> {
+    if pipeline.is_atomic() {
+        let value = core.send_transaction(pipeline, None, None, true).await?;
+        Ok(vec![value])
+    } else {
+        let value = core
+            .send_pipeline(pipeline, None, true, None, retry.unwrap_or_default())
+            .await?;
+        match value {
+            Value::Array(items) => Ok(items),
+            other => Ok(vec![other]),
+        }
+    }
+}
+
+impl redis::aio::ConnectionLike for GlideClient {
+    fn req_packed_command<'a>(&'a mut self, cmd: &'a Cmd) -> redis::RedisFuture<'a, Value> {
+        Box::pin(async move {
+            // `send_command` needs `&mut Cmd` (compression / pubsub
+            // interception may rewrite it); the trait hands us `&Cmd`.
+            let mut cmd = cmd.clone();
+            self.inner.send_command(&mut cmd, None).await
+        })
+    }
+
+    fn req_packed_commands<'a>(
+        &'a mut self,
+        cmd: &'a redis::Pipeline,
+        _offset: usize,
+        _count: usize,
+        pipeline_retry_strategy: Option<redis::PipelineRetryStrategy>,
+    ) -> redis::RedisFuture<'a, Vec<Value>> {
+        Box::pin(compat_pipeline(
+            &mut self.inner,
+            cmd,
+            pipeline_retry_strategy,
+        ))
+    }
+
+    fn get_db(&self) -> i64 {
+        self.db
+    }
+
+    fn is_closed(&self) -> bool {
+        // glide-core owns reconnection; the client is never observably
+        // "closed", matching a managed (auto-reconnecting) connection.
+        false
+    }
+}
+
+impl redis::aio::ConnectionLike for GlideClusterClient {
+    fn req_packed_command<'a>(&'a mut self, cmd: &'a Cmd) -> redis::RedisFuture<'a, Value> {
+        Box::pin(async move {
+            let mut cmd = cmd.clone();
+            // Routing is decided by glide-core from the command's keys,
+            // like redis-rs's `ClusterConnection`.
+            self.inner.send_command(&mut cmd, None).await
+        })
+    }
+
+    fn req_packed_commands<'a>(
+        &'a mut self,
+        cmd: &'a redis::Pipeline,
+        _offset: usize,
+        _count: usize,
+        pipeline_retry_strategy: Option<redis::PipelineRetryStrategy>,
+    ) -> redis::RedisFuture<'a, Vec<Value>> {
+        Box::pin(compat_pipeline(
+            &mut self.inner,
+            cmd,
+            pipeline_retry_strategy,
+        ))
+    }
+
+    fn get_db(&self) -> i64 {
+        0 // Cluster deployments always use database 0.
+    }
+
+    fn is_closed(&self) -> bool {
+        false
     }
 }

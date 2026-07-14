@@ -60,5 +60,30 @@ pub use commands::stream::{
 /// Re-export the underlying `redis` value type for advanced use.
 pub use redis::Value;
 
+// ---- redis-rs API parity re-exports ----
+//
+// `GlideClient` / `GlideClusterClient` implement `redis::aio::ConnectionLike`,
+// so the full redis-rs typed API works on them directly. Downstream crates
+// depend on `glide-rust` only — the vendored `redis` fork is a transitive git
+// dependency they cannot name — so re-export everything a redis-rs codebase
+// needs:
+//
+// ```rust,no_run
+// use glide::{AsyncCommands, GlideClient, GlideClientConfiguration};
+//
+// # async fn demo() -> glide::RedisResult<()> {
+// # let mut client = GlideClient::connect(GlideClientConfiguration::with_address("localhost", 6379)).await.unwrap();
+// client.set::<_, _, ()>("my_key", 42).await?;
+// let v: i64 = client.get("my_key").await?;
+// # Ok(()) }
+// ```
+
+/// The redis-rs typed command trait, implemented by both GLIDE clients.
+pub use redis::AsyncCommands;
+/// redis-rs error and conversion types, for code ported from redis-rs.
+pub use redis::{ErrorKind, FromRedisValue, RedisError, RedisResult, ToRedisArgs, cmd};
+/// redis-rs pipeline / transaction support (`pipe()`, `Pipeline::query_async`).
+pub use redis::{Pipeline, pipe};
+
 /// Re-export `bytes::Bytes` — the byte-string type returned by binary-safe commands.
 pub use bytes::Bytes;
