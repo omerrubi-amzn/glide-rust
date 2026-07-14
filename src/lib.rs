@@ -83,12 +83,12 @@ pub use redis::Value;
 /// The redis-rs typed command trait — GLIDE-owned drop-in with **native copy
 /// behavior** (commands sent by value, no per-call `Cmd` clone). Signature-
 /// identical to the fork's `redis::AsyncCommands`, which remains available at
-/// [`redis::AsyncCommands`](crate::redis::AsyncCommands) for code needing the
+/// [`redis::AsyncCommands`] for code needing the
 /// literal fork trait.
 pub use compat_commands::AsyncCommands;
 /// The redis-rs **blocking** typed command trait — GLIDE-owned drop-in with
 /// native copy behavior (see [`AsyncCommands`]). The fork's trait remains at
-/// [`redis::Commands`](crate::redis::Commands).
+/// [`redis::Commands`].
 #[cfg(feature = "sync")]
 pub use compat_commands::Commands;
 /// The **whole vendored `redis` crate**, re-exported. Downstream crates cannot
@@ -103,7 +103,7 @@ pub use compat_commands::Commands;
 /// ```
 ///
 /// **Semver note:** this makes the fork's API part of this crate's public
-/// surface — bumping the pinned fork rev is a breaking change (see PARITY.md).
+/// surface — bumping the pinned fork rev is a breaking change.
 pub use redis;
 /// redis-rs connection-description types, accepted by
 /// [`GlideClientConfiguration::from_connection_info`] and

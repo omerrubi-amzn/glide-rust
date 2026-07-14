@@ -108,7 +108,6 @@ cargo test          # the compat_commands_matches_fork drift test must pass
 The generator asserts the fork exposes exactly **151** methods; if that
 assertion fires after a rev bump, the fork's command surface changed — review
 the delta, update the count in the generator deliberately, and refresh the
-copy-parity docs and the pinned rev references (`PARITY.md`, `licenses/`,
-`NOTICE`). The `compat_commands_matches_fork` test (in `tests/it_compat_gen.rs`)
+copy-parity docs and the pinned rev references (`licenses/`, `NOTICE`). The `compat_commands_matches_fork` test (in `tests/it_compat_gen.rs`)
 re-runs the generator and diffs against the committed file, skipping gracefully
 when the fork checkout is unavailable.

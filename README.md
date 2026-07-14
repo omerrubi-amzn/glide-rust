@@ -151,7 +151,7 @@ client.custom_command_with_route(&["PING"], Route::AllPrimaries).await?;
 # Ok(()) }
 ```
 
-See `DESIGN.md` and `PARITY.md` for architecture, and `DEVELOPER.md` for how to
+See `DESIGN.md` for architecture, and `DEVELOPER.md` for how to
 build, test, and benchmark.
 
 ## Migrating from redis-rs
@@ -209,9 +209,8 @@ Notes:
 - Large sync pipelines: `redis::Pipeline::query` on a blocking client incurs a
   packed-byte round-trip (extra payload copies). For copy-optimal blocking
   pipelines use `sync::PipelineExt::query_glide(&client)` (or native `Batch`).
-- See `PARITY.md` for the full parity analysis and the few accepted gaps
-  (no Sentinel/unix sockets — unsupported by glide-core; Pub/Sub stays
-  client-integrated).
+- Accepted gaps: no Sentinel / unix sockets / async-std (unsupported by
+  glide-core); Pub/Sub stays client-integrated by design.
 
 ## Testing
 
