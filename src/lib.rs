@@ -92,8 +92,8 @@ pub use compat_commands::AsyncCommands;
 pub use compat_commands::Commands;
 /// The **whole vendored `redis` crate**, re-exported. Downstream crates cannot
 /// name the git-dep fork directly, and the curated flat re-exports above are
-/// deliberately incomplete where names collide with native GLIDE types
-/// (`redis::SetOptions` vs [`SetOptions`], `redis::Expiry`, the
+/// deliberately incomplete where names collide with other exported types
+/// (`redis::SetOptions`, `redis::Expiry`, the
 /// `ConnectionLike` traits, `AsyncIter`, …). Everything is reachable as
 /// `glide::redis::…` with zero collision risk:
 ///
