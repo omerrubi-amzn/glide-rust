@@ -1,4 +1,4 @@
-# DESIGN — `glide-rs`
+# DESIGN — `glide-rust`
 
 ## Dependency strategy
 The crate declares **git ("remote") dependencies** on both `glide-core` and its
@@ -43,7 +43,7 @@ and `glide::Commands` (blocking) are defined by a **hand-maintained command
 table** (`src/commands/core.rs`, one `implement_glide_commands!` macro
 invocation — the same declarative pattern the fork itself uses) mirroring the vendored
 fork's `implement_commands!` table, enforced by a signature-parity guard
-(`tools/verify_command_table.py`, run by `tests/it_parity_guard.rs`).
+(`tests/it_parity_guard.rs`, implemented in `tests/parity/`).
 Method names, generic parameter order, and
 wire encoding match the fork exactly (methods delegate to its own
 `Cmd::<name>()` constructors).

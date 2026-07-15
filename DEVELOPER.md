@@ -1,4 +1,4 @@
-# DEVELOPER guide — `glide-rs`
+# DEVELOPER guide — `glide-rust`
 
 ## Prerequisites
 - Rust 1.85+ (edition 2024; developed on 1.95). No MSRV is declared, matching the
@@ -118,8 +118,7 @@ receivers and return types deliberately deviate — GLIDE-owned iterators on
 the owned-send path, see `src/commands/scan.rs`):
 
 ```bash
-python3 tools/verify_command_table.py   # standalone
-cargo test --test it_parity_guard      # same check as a test (skips without python/fork)
+cargo test --test it_parity_guard   # pure Rust; resolves the fork via cargo metadata
 ```
 
 When the pinned fork rev is bumped, run the verifier to see what changed in

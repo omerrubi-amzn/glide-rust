@@ -1,50 +1,30 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
 //! Parity guards for the unified command table (`src/commands/core.rs`):
-//!  * `command_table_matches_fork` — runs `tools/verify_command_table.py`,
-//!    which compares every method signature in our hand-maintained table
-//!    against the vendored redis-rs fork's `implement_commands!` table
-//!    (names, generic order, argument lists). Skips gracefully when Python
-//!    or the fork checkout is unavailable (same posture as the live tests).
+//!  * `command_table_matches_fork` — compares every method signature in our
+//!    hand-maintained table against the vendored redis-rs fork's
+//!    `implement_commands!` table (names, generic order, argument lists), and
+//!    the scan-iterator methods against the fork's `commands/macros.rs`
+//!    definitions. Pure Rust — no external interpreter needed. The fork source
+//!    is resolved through `cargo metadata` (the git dependency checkout).
 //!  * `fork_trait_escape_path_*` — locks the compatibility promise that the
 //!    *literal* fork traits (`glide::redis::AsyncCommands` / `Commands`)
 //!    still work on the clients, including generic code bounded on them.
 
 mod common;
 
-use std::path::Path;
-use std::process::Command;
+mod parity;
 
 /// Signature-parity guard: our table must match the fork's, method for method.
 #[test]
 fn command_table_matches_fork() {
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let verifier = Path::new(manifest_dir).join("tools/verify_command_table.py");
-    if !verifier.exists() {
-        eprintln!("SKIP: verifier not found");
-        return;
-    }
-    let python = ["python3", "python"]
-        .into_iter()
-        .find(|p| Command::new(p).arg("--version").output().is_ok());
-    let Some(python) = python else {
-        eprintln!("SKIP: no python interpreter available");
-        return;
-    };
-    let out = Command::new(python)
-        .arg(&verifier)
-        .current_dir(manifest_dir)
-        .output()
-        .expect("run verifier");
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        if stderr.contains("could not resolve") {
-            eprintln!("SKIP: fork checkout unavailable:\n{stderr}");
-            return;
-        }
-        panic!(
-            "command table diverges from the fork:\n{}\n{stderr}",
-            String::from_utf8_lossy(&out.stdout)
-        );
+    match parity::check() {
+        Ok(summary) => println!("{summary}"),
+        Err(parity::ParityError::Skip(reason)) => eprintln!("SKIP: {reason}"),
+        Err(parity::ParityError::Violations(problems)) => panic!(
+            "command table diverges from the fork — PARITY VIOLATIONS ({}):\n - {}",
+            problems.len(),
+            problems.join("\n - ")
+        ),
     }
 }
 

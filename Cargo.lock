@@ -1250,6 +1250,8 @@ dependencies = [
  "glide-core",
  "once_cell",
  "redis",
+ "regex",
+ "serde_json",
  "sha1_smol",
  "thiserror 2.0.18",
  "tokio",
