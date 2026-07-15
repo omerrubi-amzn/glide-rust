@@ -1,8 +1,8 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
 //! Mock-executor unit tests for the generic (key) command family.
 use super::Mock;
-use crate::commands::generic::GenericCommands;
-use crate::commands::options::{Limit, OrderBy, RestoreOptions};
+use glide::commands::generic::GenericCommands;
+use glide::commands::options::{Limit, OrderBy, RestoreOptions};
 use redis::Value;
 
 #[tokio::test]

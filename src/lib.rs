@@ -17,9 +17,6 @@ pub mod value;
 #[cfg(feature = "sync")]
 pub mod sync;
 
-#[cfg(test)]
-mod command_mock;
-
 // ---- Primary public API re-exports (mirror Python's top-level `glide` package) ----
 
 pub use client::{

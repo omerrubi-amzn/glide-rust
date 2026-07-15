@@ -1,8 +1,8 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
 //! Mock-executor unit tests for the geospatial command family.
 use super::Mock;
-use crate::commands::geo::{GeoCommands, GeoSearchShape, GeoUnit, GeospatialData};
-use crate::commands::options::{ConditionalChange, OrderBy};
+use glide::commands::geo::{GeoCommands, GeoSearchShape, GeoUnit, GeospatialData};
+use glide::commands::options::{ConditionalChange, OrderBy};
 use redis::Value;
 
 fn coord(lon: f64, lat: f64) -> GeospatialData {

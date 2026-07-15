@@ -1,7 +1,7 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
 //! Mock-executor unit tests for the sorted-set command family.
 use super::Mock;
-use crate::commands::sorted_set::{AggregationType, LexBound, ScoreBound, SortedSetCommands};
+use glide::commands::sorted_set::{AggregationType, LexBound, ScoreBound, SortedSetCommands};
 use redis::Value;
 
 #[tokio::test]
@@ -72,7 +72,7 @@ async fn zrangestore_by_score_rev_swaps_bounds_and_limit() {
         ScoreBound::Inclusive(1.0),
         ScoreBound::Inclusive(5.0),
         true,
-        Some(crate::commands::options::Limit {
+        Some(glide::commands::options::Limit {
             offset: 0,
             count: 10,
         }),

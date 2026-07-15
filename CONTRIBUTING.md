@@ -37,7 +37,7 @@ cargo deny check                                    # advisories/licenses/bans/s
 ## Guidelines
 
 - Keep changes focused and covered by tests (a server-free mock test in
-  `src/command_mock/` and/or a live test in `tests/it_*.rs`).
+  `tests/mock_commands/` and/or a live test in `tests/it_*.rs`).
 - Follow the existing idioms: build a `redis::Cmd`, dispatch through
   `execute_command`, and convert replies with the `crate::value::*` helpers.
 - Update `DESIGN.md` / `DEVELOPER.md` when you change architecture or workflow.

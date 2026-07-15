@@ -1,7 +1,7 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
 //! Mock-executor unit tests for the search (`FT.*`) command family.
 use super::Mock;
-use crate::commands::ft::FtCommands;
+use glide::commands::ft::FtCommands;
 use bytes::Bytes;
 use redis::Value;
 

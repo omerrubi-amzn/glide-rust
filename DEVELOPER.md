@@ -74,9 +74,9 @@ src/
     core.rs       the unified command table (AsyncCommands / Commands)
     scan.rs       GLIDE-owned scan iterators
     <family>.rs   extension traits (blanket impls over CommandExecutor)
-  command_mock/   server-free encoding/decoding tests for the extensions
 tests/
   common/mod.rs   ephemeral server + cluster harness
+  mock_commands/  server-free encoding/decoding tests for the extensions
   it_*.rs         per-family live tests (one file per command family)
 benches/
   throughput.rs   latency + throughput
@@ -89,7 +89,7 @@ benches/
    convert with a `crate::value::*` helper.
 3. Add an integration test in the family's `tests/it_<family>.rs` (use the
    `resp_test!` macro for RESP2/RESP3 coverage), and a server-free encoding test
-   in `src/command_mock/<family>.rs`.
+   in `tests/mock_commands/<family>.rs`.
 4. `cargo test && cargo clippy --all-targets`.
 
 ## Extending value conversion

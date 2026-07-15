@@ -1,7 +1,7 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
 //! Mock-executor unit tests for the JSON module command family.
 use super::Mock;
-use crate::commands::json::JsonCommands;
+use glide::commands::json::JsonCommands;
 use bytes::Bytes;
 use redis::Value;
 
