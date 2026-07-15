@@ -78,7 +78,7 @@ src/
     scan.rs       GLIDE-owned scan iterators
     <family>.rs   extension traits (blanket impls over CommandExecutor)
 tests/
-  common/mod.rs   ephemeral server + cluster harness
+  common/         shared harness (server, cluster, timeout, pubsub, macros)
   mock_commands/  server-free encoding/decoding tests for the extensions
   it_*.rs         per-family live tests (one file per command family)
 benches/
