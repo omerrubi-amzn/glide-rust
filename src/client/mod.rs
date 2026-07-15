@@ -69,6 +69,49 @@ fn make_push_channel(
     }
 }
 
+/// The client's push receiver, or the error both clients report when Pub/Sub
+/// was not configured.
+fn pubsub_rx(rx: &Option<PushRx>) -> Result<&PushRx> {
+    rx.as_ref()
+        .ok_or_else(|| GlideError::Request("client has no configured pub/sub subscriptions".into()))
+}
+
+/// Shared implementation of `get_pubsub_message`: wait for the next Pub/Sub
+/// *message* push, skipping non-message pushes (subscribe/unsubscribe
+/// confirmations, invalidations, disconnects).
+async fn recv_pubsub_message(rx: &Option<PushRx>) -> Result<PubSubMessage> {
+    let mut guard = pubsub_rx(rx)?.lock().await;
+    loop {
+        match guard.recv().await {
+            Some(push) => {
+                if let Some(msg) = push_to_message(push) {
+                    return Ok(msg);
+                }
+            }
+            None => return Err(GlideError::Request("pub/sub channel closed".into())),
+        }
+    }
+}
+
+/// Shared implementation of `try_get_pubsub_message`: non-blocking variant of
+/// [`recv_pubsub_message`]; returns `None` when no message is available.
+async fn try_recv_pubsub_message(rx: &Option<PushRx>) -> Result<Option<PubSubMessage>> {
+    let mut guard = pubsub_rx(rx)?.lock().await;
+    loop {
+        match guard.try_recv() {
+            Ok(push) => {
+                if let Some(msg) = push_to_message(push) {
+                    return Ok(Some(msg));
+                }
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => return Ok(None),
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                return Err(GlideError::Request("pub/sub channel closed".into()));
+            }
+        }
+    }
+}
+
 /// Convert a raw `PushInfo` into a [`PubSubMessage`], returning `None` for
 /// non-message push kinds (subscribe/unsubscribe confirmations, invalidations,
 /// disconnects).
@@ -199,45 +242,14 @@ impl GlideClient {
     ///
     /// Returns an error if the client was not configured with subscriptions.
     pub async fn get_pubsub_message(&self) -> Result<PubSubMessage> {
-        let rx = self.pubsub_rx.as_ref().ok_or_else(|| {
-            GlideError::Request("client has no configured pub/sub subscriptions".into())
-        })?;
-        let mut guard = rx.lock().await;
-        loop {
-            match guard.recv().await {
-                Some(push) => {
-                    if let Some(msg) = push_to_message(push) {
-                        return Ok(msg);
-                    }
-                }
-                None => {
-                    return Err(GlideError::Request("pub/sub channel closed".into()));
-                }
-            }
-        }
+        recv_pubsub_message(&self.pubsub_rx).await
     }
 
     /// Try to get the next Pub/Sub message without blocking
     /// (`try_get_pubsub_message`). Returns `None` if no message is currently
     /// available.
     pub async fn try_get_pubsub_message(&self) -> Result<Option<PubSubMessage>> {
-        let rx = self.pubsub_rx.as_ref().ok_or_else(|| {
-            GlideError::Request("client has no configured pub/sub subscriptions".into())
-        })?;
-        let mut guard = rx.lock().await;
-        loop {
-            match guard.try_recv() {
-                Ok(push) => {
-                    if let Some(msg) = push_to_message(push) {
-                        return Ok(Some(msg));
-                    }
-                }
-                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => return Ok(None),
-                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                    return Err(GlideError::Request("pub/sub channel closed".into()));
-                }
-            }
-        }
+        try_recv_pubsub_message(&self.pubsub_rx).await
     }
 
     /// Execute a [`redis::Pipeline`] with GLIDE execution options
@@ -331,42 +343,13 @@ impl GlideClusterClient {
     /// Wait for the next Pub/Sub message (including shard messages) on this
     /// client's configured subscriptions.
     pub async fn get_pubsub_message(&self) -> Result<PubSubMessage> {
-        let rx = self.pubsub_rx.as_ref().ok_or_else(|| {
-            GlideError::Request("client has no configured pub/sub subscriptions".into())
-        })?;
-        let mut guard = rx.lock().await;
-        loop {
-            match guard.recv().await {
-                Some(push) => {
-                    if let Some(msg) = push_to_message(push) {
-                        return Ok(msg);
-                    }
-                }
-                None => return Err(GlideError::Request("pub/sub channel closed".into())),
-            }
-        }
+        recv_pubsub_message(&self.pubsub_rx).await
     }
 
     /// Try to get the next Pub/Sub message without blocking. Returns `None` if
     /// no message is currently available.
     pub async fn try_get_pubsub_message(&self) -> Result<Option<PubSubMessage>> {
-        let rx = self.pubsub_rx.as_ref().ok_or_else(|| {
-            GlideError::Request("client has no configured pub/sub subscriptions".into())
-        })?;
-        let mut guard = rx.lock().await;
-        loop {
-            match guard.try_recv() {
-                Ok(push) => {
-                    if let Some(msg) = push_to_message(push) {
-                        return Ok(Some(msg));
-                    }
-                }
-                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => return Ok(None),
-                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                    return Err(GlideError::Request("pub/sub channel closed".into()));
-                }
-            }
-        }
+        try_recv_pubsub_message(&self.pubsub_rx).await
     }
 
     /// Execute a raw command with an explicit route.

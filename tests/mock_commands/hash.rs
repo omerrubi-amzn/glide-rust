@@ -1,9 +1,9 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
 //! Mock-executor unit tests for the hash command family.
 use super::Mock;
-use crate::commands::hash::HashCommands;
-use crate::commands::options::{ExpireOptions, ExpirySet};
 use bytes::Bytes;
+use glide::commands::hash::HashCommands;
+use glide::commands::options::{ExpireOptions, ExpirySet};
 use redis::Value;
 
 #[tokio::test]
@@ -104,7 +104,7 @@ async fn hexpire_with_condition() {
         "h",
         100,
         &["f1"],
-        Some(crate::commands::options::ExpireOptions::HasNoExpiry),
+        Some(glide::commands::options::ExpireOptions::HasNoExpiry),
     )
     .await
     .unwrap();
@@ -163,7 +163,7 @@ async fn hgetex_encoding() {
     m.hgetex(
         "h",
         &["f1"],
-        Some(crate::commands::options::ExpirySet::Seconds(60)),
+        Some(glide::commands::options::ExpirySet::Seconds(60)),
     )
     .await
     .unwrap();
@@ -181,8 +181,8 @@ async fn hsetex_encoding() {
     m.hsetex(
         "h",
         &[("f1", "v1")],
-        Some(crate::commands::options::HashFieldConditionalChange::OnlyIfNoneExist),
-        Some(crate::commands::options::ExpirySet::Seconds(60)),
+        Some(glide::commands::options::HashFieldConditionalChange::OnlyIfNoneExist),
+        Some(glide::commands::options::ExpirySet::Seconds(60)),
     )
     .await
     .unwrap();

@@ -1,8 +1,8 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
 //! Mock-executor unit tests for the Pub/Sub command family.
 use super::Mock;
-use crate::commands::pubsub::PubSubCommands;
 use bytes::Bytes;
+use glide::commands::pubsub::PubSubCommands;
 use redis::Value;
 
 // NOTE: no `publish` test here — `PUBLISH` moved to the unified command table

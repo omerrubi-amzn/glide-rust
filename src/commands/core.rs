@@ -33,9 +33,12 @@
 //! divergence from the fork's table (see DEVELOPER.md).
 
 use redis::{
-    Cmd, Direction, Expiry, FromRedisValue, LposOptions, RedisFuture, RedisResult, SetOptions,
-    ToRedisArgs, Value, from_owned_redis_value,
+    Cmd, Direction, Expiry, FromRedisValue, LposOptions, RedisFuture, SetOptions, ToRedisArgs,
+    Value, from_owned_redis_value,
 };
+// Only the blocking (`Commands`) flavor names `RedisResult` directly.
+#[cfg(feature = "sync")]
+use redis::RedisResult;
 
 /// Defines the unified [`AsyncCommands`] and [`Commands`] traits from one
 /// command table.

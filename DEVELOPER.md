@@ -1,4 +1,4 @@
-# DEVELOPER guide — `glide-rs`
+# DEVELOPER guide — `glide-rust`
 
 ## Prerequisites
 - Rust 1.85+ (edition 2024; developed on 1.95). No MSRV is declared, matching the
@@ -59,7 +59,10 @@ Criterion latency benchmarks for `SET`/`GET`/`INCR`.
 src/
   lib.rs          crate root + public re-exports
   error.rs        GlideError (mirrors Python exceptions)
-  config.rs       client configuration -> glide_core ConnectionRequest
+  config/         client configuration -> glide_core ConnectionRequest
+    common.rs     shared types + builder-setter macro + request lowering
+    standalone.rs GlideClientConfiguration
+    cluster.rs    GlideClusterClientConfiguration
   routes.rs       cluster routing (Route -> RoutingInfo)
   value.rs        redis::Value -> typed Rust conversions (RESP2 + RESP3)
   executor.rs     CommandExecutor seam + custom_command
@@ -74,9 +77,9 @@ src/
     core.rs       the unified command table (AsyncCommands / Commands)
     scan.rs       GLIDE-owned scan iterators
     <family>.rs   extension traits (blanket impls over CommandExecutor)
-  command_mock/   server-free encoding/decoding tests for the extensions
 tests/
-  common/mod.rs   ephemeral server + cluster harness
+  common/         shared harness (server, cluster, timeout, pubsub, macros)
+  mock_commands/  server-free encoding/decoding tests for the extensions
   it_*.rs         per-family live tests (one file per command family)
 benches/
   throughput.rs   latency + throughput
@@ -89,7 +92,7 @@ benches/
    convert with a `crate::value::*` helper.
 3. Add an integration test in the family's `tests/it_<family>.rs` (use the
    `resp_test!` macro for RESP2/RESP3 coverage), and a server-free encoding test
-   in `src/command_mock/<family>.rs`.
+   in `tests/mock_commands/<family>.rs`.
 4. `cargo test && cargo clippy --all-targets`.
 
 ## Extending value conversion
@@ -115,8 +118,7 @@ receivers and return types deliberately deviate — GLIDE-owned iterators on
 the owned-send path, see `src/commands/scan.rs`):
 
 ```bash
-python3 tools/verify_command_table.py   # standalone
-cargo test --test it_parity_guard      # same check as a test (skips without python/fork)
+cargo test --test it_parity_guard   # pure Rust; resolves the fork via cargo metadata
 ```
 
 When the pinned fork rev is bumped, run the verifier to see what changed in

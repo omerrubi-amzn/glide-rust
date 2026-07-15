@@ -1,7 +1,7 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
 //! Mock-executor unit tests for the bitmap command family (command dispatch).
 use super::Mock;
-use crate::commands::bitmap::{
+use glide::commands::bitmap::{
     BitEncoding, BitFieldOffset, BitFieldSubcommand, BitmapCommands, BitmapIndexType,
 };
 use redis::Value;

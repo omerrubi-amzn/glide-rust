@@ -1,7 +1,7 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
 //! Mock-executor unit tests for the set command family.
 use super::Mock;
-use crate::commands::set::SetCommands;
+use glide::commands::set::SetCommands;
 
 #[tokio::test]
 async fn sintercard_variants() {

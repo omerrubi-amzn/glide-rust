@@ -1,5 +1,5 @@
 // Copyright Valkey GLIDE Project Contributors - SPDX Identifier: Apache-2.0
-//! Server-free unit tests for every command family.
+//! Server-free tests for every command family (no Valkey server needed).
 //!
 //! Each command method builds a `redis::Cmd` and dispatches it through the
 //! [`CommandExecutor`] seam. These tests install an in-process [`Mock`] executor
@@ -7,20 +7,21 @@
 //! request *encoding* — and (b) returns a preconfigured `redis::Value` so the
 //! method's response *decoding* into its typed return can be asserted. No Valkey
 //! server is involved, so the whole suite is deterministic and fast.
-#![cfg(test)]
-#![allow(clippy::type_complexity, clippy::wrong_self_convention, dead_code)]
 
-use crate::error::Result;
-use crate::executor::CommandExecutor;
 use async_trait::async_trait;
+use glide::error::Result;
+use glide::executor::CommandExecutor;
 use redis::cluster_routing::RoutingInfo;
 use redis::{Arg, Cmd, Value};
 use std::sync::Mutex;
 
+/// A captured command: the raw argument tokens plus the routing it was sent with.
+type CapturedCommand = (Vec<Vec<u8>>, Option<RoutingInfo>);
+
 /// A deterministic, server-free `CommandExecutor` used by the family tests.
 pub(crate) struct Mock {
     response: Mutex<Value>,
-    captured: Mutex<Option<(Vec<Vec<u8>>, Option<RoutingInfo>)>>,
+    captured: Mutex<Option<CapturedCommand>>,
 }
 
 impl Mock {
@@ -56,10 +57,6 @@ impl Mock {
     pub(crate) fn array(items: Vec<Value>) -> Self {
         Mock::new(Value::Array(items))
     }
-    /// Reply with a double.
-    pub(crate) fn double(d: f64) -> Self {
-        Mock::new(Value::Double(d))
-    }
 
     /// The captured command tokens, decoded lossily to UTF-8 strings.
     pub(crate) fn args(&self) -> Vec<String> {
@@ -81,13 +78,7 @@ impl Mock {
         assert_eq!(got, exp, "command encoding mismatch");
     }
 
-    /// The command keyword (first token), uppercased as produced.
-    pub(crate) fn keyword(&self) -> String {
-        self.args().into_iter().next().expect("no command")
-    }
-
     /// The routing the executor was handed (cluster paths). Consumes it.
-    #[allow(dead_code)]
     pub(crate) fn routing(&self) -> Option<RoutingInfo> {
         self.captured
             .lock()
@@ -126,5 +117,5 @@ mod scripting;
 mod server_management;
 mod set;
 mod sorted_set;
-mod store_string;
 mod stream;
+mod string;
