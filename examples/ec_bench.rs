@@ -14,6 +14,9 @@
 //!
 //! Output is human-readable plus machine-parseable `RESULT` lines:
 //!   `RESULT <op> tls=<mode> conc=<n> ops=<n> secs=<f> throughput_ops=<f> p50_us=<f> p99_us=<f> avg_us=<f>`
+//!
+//! Run with:
+//!   GLIDE_HOST=<endpoint> cargo run --release --example ec_bench
 
 use glide::{AsyncCommands, GlideClusterClient, GlideClusterClientConfiguration, TlsConfig};
 use std::env;
