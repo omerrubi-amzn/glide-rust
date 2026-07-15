@@ -8,9 +8,9 @@
 //! method's response *decoding* into its typed return can be asserted. No Valkey
 //! server is involved, so the whole suite is deterministic and fast.
 
+use async_trait::async_trait;
 use glide::error::Result;
 use glide::executor::CommandExecutor;
-use async_trait::async_trait;
 use redis::cluster_routing::RoutingInfo;
 use redis::{Arg, Cmd, Value};
 use std::sync::Mutex;
@@ -117,5 +117,5 @@ mod scripting;
 mod server_management;
 mod set;
 mod sorted_set;
-mod string;
 mod stream;
+mod string;

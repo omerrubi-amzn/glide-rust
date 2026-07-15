@@ -59,7 +59,10 @@ Criterion latency benchmarks for `SET`/`GET`/`INCR`.
 src/
   lib.rs          crate root + public re-exports
   error.rs        GlideError (mirrors Python exceptions)
-  config.rs       client configuration -> glide_core ConnectionRequest
+  config/         client configuration -> glide_core ConnectionRequest
+    common.rs     shared types + builder-setter macro + request lowering
+    standalone.rs GlideClientConfiguration
+    cluster.rs    GlideClusterClientConfiguration
   routes.rs       cluster routing (Route -> RoutingInfo)
   value.rs        redis::Value -> typed Rust conversions (RESP2 + RESP3)
   executor.rs     CommandExecutor seam + custom_command
