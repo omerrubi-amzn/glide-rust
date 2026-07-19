@@ -1,23 +1,26 @@
 # DESIGN — `glide-rust`
 
 ## Dependency strategy
-The crate declares **git ("remote") dependencies** on both `glide-core` and its
-*vendored* `redis` (the redis-rs fork, v0.25.2 — predating the upstream
-license change), pinned to the same commit of the canonical
-`valkey-io/valkey-glide` repository:
+The crate declares **crates.io dependencies** on both `glide-core` and its
+`redis` fork (redis-rs v0.25.2 — predating the upstream license change),
+via the experimentally-published packages from the `valkey-io/valkey-glide`
+project, pinned to exact versions:
 
 ```toml
-glide-core = { git = "https://github.com/valkey-io/valkey-glide", rev = "..." }
-redis      = { git = "https://github.com/valkey-io/valkey-glide", package = "redis", rev = "...", features = [
+glide-core = { package = "experimental-glide-core-lib", version = "=0.1.1" }
+redis      = { package = "experimental-glide-core-rs-dependency", version = "=0.25.2", features = [
     "aio", "tokio-comp", "cluster", "cluster-async",
 ] }
 ```
 
-Because both point at the **same git source + rev**, Cargo unifies our
-`redis::Cmd` / `redis::Value` with the exact types `glide-core` expects — no type
-mismatch, no re-wrapping — and consumers don't need a local monorepo checkout.
-(Previously these were local `path` deps; the git form removes the
-sibling-checkout requirement but still does not enable a crates.io publish.)
+Because `glide-core` depends on the **same crates.io fork package**, Cargo
+unifies our `redis::Cmd` / `redis::Value` with the exact types `glide-core`
+expects — no type mismatch, no re-wrapping — and consumers need neither a
+monorepo checkout nor git fetches. The pins are exact (`=x.y.z`) because the
+packages are brand-new and explicitly experimental; bump deliberately and
+re-run the parity guard. (History: these were local `path` deps, then git
+deps pinned to a monorepo rev; the crates.io form additionally unblocks
+publishing this crate.)
 
 ## Dispatch seam — `CommandExecutor`
 ```rust

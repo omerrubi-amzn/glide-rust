@@ -45,8 +45,9 @@ GLIDE binding.
 
 - **Rust 1.85+** (the crate and `glide-core` use edition 2024).
 - **Network access on the first build** — the crate links `glide-core` and its
-  vendored `redis-rs` as pinned **git** dependencies, which Cargo fetches
-  automatically (no monorepo checkout needed; see [Status & publishing](#status--publishing)).
+  `redis-rs` fork as **crates.io** dependencies (the experimentally-published
+  `experimental-glide-*` crates), which Cargo fetches automatically
+  (see [Status & publishing](#status--publishing)).
 - A running **Valkey** (or Redis OSS) server to connect to — e.g.
   `valkey-server` locally, `docker run -p 6379:6379 valkey/valkey`, or an
   ElastiCache/MemoryDB endpoint.
@@ -249,21 +250,23 @@ them at a specific binary with `VALKEY_SERVER_PATH=/path/to/valkey-server`. See
 
 ## Status & publishing
 
-This crate links `glide-core` and its vendored `redis-rs` via **git ("remote")
-dependencies** pinned to a commit of the canonical `valkey-io/valkey-glide`
-repository (see `DEVELOPER.md`). Consequences to be aware of:
+This crate consumes `glide-core` and its `redis-rs` fork from **crates.io**,
+via the experimentally-published packages
+[`experimental-glide-core-lib`](https://crates.io/crates/experimental-glide-core-lib)
+(lib name `glide_core`) and
+[`experimental-glide-core-rs-dependency`](https://crates.io/crates/experimental-glide-core-rs-dependency)
+(lib name `redis`, v0.25.2 — the fork predating the upstream license change),
+pinned to exact versions in `Cargo.toml`. Consequences:
 
-- **Builds fetch the dependency automatically** — no local monorepo checkout is
-  required; you just need network access to GitHub on the first build.
-- **Not yet publishable to crates.io as-is** — `cargo publish` rejects **both**
-  git and path dependencies, so the crate cannot be published while it links
-  `glide-core` (and the vendored redis-rs fork) from git. The only route to
-  crates.io is to **publish `glide-core` and the redis-rs fork to crates.io and
-  switch these to versioned dependencies** (`glide-core = "x.y"`). A git
-  dependency lets downstreams consume this crate straight from its repo, but does
-  not itself enable a crates.io publish. This is an inherent consequence of the
-  "link core directly, no FFI" design and is a deliberate release-time decision.
-- `docs.rs` builds would likewise need the dependency strategy resolved first.
+- **Builds fetch dependencies automatically** from crates.io — no monorepo
+  checkout, no git fetches.
+- **The crates.io-publish blocker is gone**: with no git/path dependencies,
+  `cargo publish` (and `docs.rs` builds) of this crate are now possible.
+- **Caveat — the core crates are explicitly experimental**: brand-new,
+  `experimental-` prefixed, and not (yet) the Valkey project's official
+  stable publication channel. That's why the pins are exact (`=x.y.z`);
+  bump them deliberately and re-run the parity guard
+  (`cargo test --test it_parity_guard`), which flags any command-surface drift.
 
 ## License
 

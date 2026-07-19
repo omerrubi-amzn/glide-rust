@@ -3,12 +3,13 @@
 ## Prerequisites
 - Rust 1.85+ (edition 2024; developed on 1.95). No MSRV is declared, matching the
   upstream valkey-glide Rust crates.
-- The crate depends on `glide-core` and its vendored `redis-rs` via **git
-  ("remote") dependencies** pinned to a specific commit of
-  `github.com/valkey-io/valkey-glide` in `Cargo.toml`, so Cargo fetches them
-  automatically — **no local monorepo checkout is required**. You do need network
-  access to GitHub on the first build (Cargo caches it afterwards). To build
-  against a different revision, update the `rev = "..."` in `Cargo.toml`.
+- The crate depends on `glide-core` and its `redis-rs` fork via **crates.io**
+  packages (`experimental-glide-core-lib`, lib name `glide_core`;
+  `experimental-glide-core-rs-dependency`, lib name `redis`), pinned to exact
+  versions in `Cargo.toml`, so Cargo fetches them automatically — **no local
+  monorepo checkout is required**. You need network access to crates.io on the
+  first build (Cargo caches afterwards). To build against different versions,
+  update the `version = "=x.y.z"` pins and re-run the parity guard.
 - A `valkey-server` (or `redis-server`) binary for integration tests / benches.
   The harness auto-discovers one on `PATH`; override with:
   ```bash
