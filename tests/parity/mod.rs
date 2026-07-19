@@ -89,9 +89,12 @@ fn read(path: &Path) -> Result<String, ParityError> {
 }
 
 /// Locate the fork's `src/commands/mod.rs` via `cargo metadata` (the same
-/// resolution the Python script used): find the `redis` package's manifest and
-/// take `src/commands/mod.rs` next to it.
+/// resolution the Python script used): find the fork package's manifest and
+/// take `src/commands/mod.rs` next to it. The fork is published on crates.io
+/// as `experimental-glide-core-rs-dependency` (lib name `redis`); older
+/// checkouts consumed it as the git package `redis`.
 fn resolve_fork_mod_rs(manifest_dir: &Path) -> Result<PathBuf, ParityError> {
+    const FORK_PACKAGE_NAMES: [&str; 2] = ["experimental-glide-core-rs-dependency", "redis"];
     let out = Command::new(env!("CARGO"))
         .args(["metadata", "--format-version", "1", "--offline"])
         .current_dir(manifest_dir)
@@ -105,14 +108,20 @@ fn resolve_fork_mod_rs(manifest_dir: &Path) -> Result<PathBuf, ParityError> {
     }
     let meta: serde_json::Value = serde_json::from_slice(&out.stdout)
         .map_err(|e| ParityError::Skip(format!("cannot parse cargo metadata: {e}")))?;
-    let manifest = meta["packages"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|p| p["name"] == "redis")
-        .and_then(|p| p["manifest_path"].as_str())
+    let manifest = FORK_PACKAGE_NAMES
+        .iter()
+        .find_map(|name| {
+            meta["packages"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|p| p["name"] == *name)
+                .and_then(|p| p["manifest_path"].as_str())
+        })
         .ok_or_else(|| {
-            ParityError::Skip("could not resolve the `redis` package via cargo metadata".into())
+            ParityError::Skip(
+                "could not resolve the redis-rs fork package via cargo metadata".into(),
+            )
         })?;
     let dir = Path::new(manifest)
         .parent()

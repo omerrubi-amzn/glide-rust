@@ -42,10 +42,6 @@ ignore = false
 [bans]
 # Duplicate versions are common via the aws-sdk/windows-sys trees.
 multiple-versions = "allow"
-# This crate (and glide-core/redis-rs/telemetrylib) are consumed via git deps
-# pinned to a rev, which cargo-deny reports as wildcard requirements — allowed,
-# as upstream does. `unknown-git` below is intentionally "deny": the one allowed
-# git source (valkey-io/valkey-glide) is a first-party dependency.
 wildcards = "allow"
 highlight = "all"
 allow = []
@@ -57,6 +53,6 @@ skip-tree = []
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# glide-core + vendored redis-rs are consumed from this first-party git source
-# (pinned by rev in Cargo.toml). Any other git source is denied.
-allow-git = ["https://github.com/valkey-io/valkey-glide"]
+# All dependencies (including glide-core and its redis-rs fork, published as
+# experimental-glide-* crates) come from crates.io; git sources are denied.
+allow-git = []
