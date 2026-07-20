@@ -12,6 +12,11 @@ Because `glide-core` is itself written in Rust, this wrapper links to it
 **directly** — no FFI, no socket bridge — making it the thinnest and fastest
 GLIDE binding.
 
+> **Status**: This is an experimental community binding built on `glide-core`.
+> It is **not (yet) an official [valkey-io](https://github.com/valkey-io)
+> project** — for the official GLIDE clients (Python, Java, Node.js, Go, and
+> more), see [valkey-io/valkey-glide](https://github.com/valkey-io/valkey-glide).
+
 ## Highlights
 
 - **Async first** — `GlideClient` (standalone) and `GlideClusterClient` (cluster)
@@ -38,6 +43,25 @@ GLIDE binding.
   module (gRPC / HTTP / file exporters).
 - **Feature parity with the Python GLIDE wrapper** as the baseline for both the
   API surface and the test suite.
+
+## Documentation
+
+GLIDE concepts — cluster routing, [batching](https://glide.valkey.io/concepts/client-features/batch-commands/),
+the [PubSub model](https://glide.valkey.io/concepts/client-features/pubsub-model/),
+[multi-slot command handling](https://glide.valkey.io/concepts/client-features/multi-slot-command-handling/),
+and [OpenTelemetry](https://glide.valkey.io/concepts/client-features/open-telemetry/) —
+are shared with the official clients and documented at
+[glide.valkey.io](https://glide.valkey.io); this client is built on the same core,
+so those concepts apply here unchanged. For Rust-specific architecture see
+[DESIGN.md](./DESIGN.md).
+
+## Supported Engine Versions
+
+The compatibility target matches GLIDE — see the
+[Supported Engine Versions table](https://github.com/valkey-io/valkey-glide/blob/main/README.md#supported-engine-versions).
+CI runs the full integration suite against **Valkey 8.1, 8.0, and 7.2** and
+**Redis OSS 7.2**, on Linux (x86_64 and aarch64). Other platforms (e.g. macOS)
+should work wherever `glide-core` builds, but are not exercised in CI.
 
 ## Installation
 
@@ -79,13 +103,15 @@ the build fails with `environment variable GLIDE_VERSION not defined`. Add a
 # .cargo/config.toml
 [env]
 GLIDE_NAME = "GlideRust"
-GLIDE_VERSION = "0.2.0"
+GLIDE_VERSION = "0.2.0"   # set to the glide-rust version you pinned
 # Optional: avoids an aws-lc-rs CPU-jitter-entropy connection-latency regression.
 AWS_LC_SYS_NO_JITTER_ENTROPY = "1"
 ```
 
-(These identify the client library/version reported to the server on the
-connection handshake.)
+These identify the client library/version reported to the server on the
+connection handshake (any non-empty strings work; keep `GLIDE_VERSION` in sync
+with the `glide-rust` version you depend on so server-side client listings stay
+meaningful).
 
 ### 3. Build
 
@@ -264,6 +290,23 @@ repository (see `DEVELOPER.md`). Consequences to be aware of:
   not itself enable a crates.io publish. This is an inherent consequence of the
   "link core directly, no FFI" design and is a deliberate release-time decision.
 - `docs.rs` builds would likewise need the dependency strategy resolved first.
+
+## Getting Help
+
+- **GitHub Issues**: Check the [existing issues](https://github.com/omerrubi-amzn/glide-rust/issues)
+  first; if your question or problem isn't covered, open a new issue.
+- **Valkey Slack**: For questions about Valkey or GLIDE in general,
+  [join the Valkey Slack](https://join.slack.com/t/valkey-oss-developer/shared_invite/zt-2nxs51chx-EB9hu9Qdch3GMfRcztTSkQ).
+
+## Contributing
+
+Contributions are welcome — bug reports, feature requests, and pull requests.
+See the [Contributing Guidelines](./CONTRIBUTING.md) to get started and
+[DEVELOPER.md](./DEVELOPER.md) for the development workflow.
+
+## Security
+
+To report a security vulnerability, please see the [Security Policy](./SECURITY.md).
 
 ## License
 
