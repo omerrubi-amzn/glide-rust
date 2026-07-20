@@ -20,6 +20,16 @@ on:
 permissions:
     contents: read
 
+# Keep the target/ dir small on the ~14 GB GitHub-hosted runners: the test
+# matrix builds ~30 integration test binaries that each statically link
+# glide-core + aws-lc-sys + criterion, and full debuginfo alone pushes the
+# debug target past the runner's free disk ("No space left on device").
+# Incremental caches are useless on CI (fresh runners) and only add bloat.
+env:
+    CARGO_INCREMENTAL: "0"
+    CARGO_PROFILE_DEV_DEBUG: "0"
+    CARGO_PROFILE_TEST_DEBUG: "0"
+
 jobs:
     lint:
         runs-on: ubuntu-24.04
@@ -30,7 +40,7 @@ jobs:
             - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
               with:
                   path: target
-                  key: x86_64-unknown-linux-gnu-lint
+                  key: x86_64-unknown-linux-gnu-lint-v2
             - name: Format
               run: cargo fmt --all -- --check
             - name: Clippy (all features)
@@ -51,7 +61,7 @@ jobs:
             - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
               with:
                   path: target
-                  key: x86_64-unknown-linux-gnu-build
+                  key: x86_64-unknown-linux-gnu-build-v2
             - name: Build (debug)
               run: cargo build --verbose
             - name: Build (release)
@@ -82,12 +92,25 @@ jobs:
                     - { runner: ubuntu-24.04-arm, arch: arm64, engine: { type: redis, version: "7.2" } }
         steps:
             - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+            # GitHub-hosted runners ship with ~14 GB free; reclaim ~25 GB of
+            # preinstalled toolchains we never use so the debug test target
+            # (+ engine build) can't exhaust the disk mid-compile.
+            - name: Free disk space
+              run: |
+                  set -euo pipefail
+                  df -h /
+                  sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+                      /usr/local/.ghcup /usr/local/share/boost "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}" || true
+                  sudo docker image prune --all --force >/dev/null 2>&1 || true
+                  df -h /
             - name: Install Rust toolchain
               run: rustup toolchain install stable --profile minimal && rustup default stable
             - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
               with:
                   path: target
-                  key: ${{ matrix.arch }}-test-${{ matrix.engine.type }}-${{ matrix.engine.version }}
+                  # v2: invalidate caches saved before debuginfo was stripped
+                  # (CARGO_PROFILE_*_DEBUG=0); the old ones are several GB larger.
+                  key: ${{ matrix.arch }}-test-v2-${{ matrix.engine.type }}-${{ matrix.engine.version }}
             - name: Cache ${{ matrix.engine.type }} ${{ matrix.engine.version }} build
               id: engine-cache
               uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -109,6 +132,9 @@ jobs:
                   make -C engine-src -j"$(nproc)" BUILD_TLS=yes
                   mkdir -p "$HOME/engine-install"
                   cp engine-src/src/*-server engine-src/src/*-cli "$HOME/engine-install/"
+                  # The engine build tree is ~1-2 GB of objects we no longer
+                  # need; reclaim it before the (disk-hungry) cargo build.
+                  rm -rf engine-src
             - name: Register engine on PATH
               run: |
                   set -euo pipefail
