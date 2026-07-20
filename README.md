@@ -12,11 +12,6 @@ Because `glide-core` is itself written in Rust, this wrapper links to it
 **directly** — no FFI, no socket bridge — making it the thinnest and fastest
 GLIDE binding.
 
-> **Status**: This is an experimental community binding built on `glide-core`.
-> It is **not (yet) an official [valkey-io](https://github.com/valkey-io)
-> project** — for the official GLIDE clients (Python, Java, Node.js, Go, and
-> more), see [valkey-io/valkey-glide](https://github.com/valkey-io/valkey-glide).
-
 ## Highlights
 
 - **Async first** — `GlideClient` (standalone) and `GlideClusterClient` (cluster)
