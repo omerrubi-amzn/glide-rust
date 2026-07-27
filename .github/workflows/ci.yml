@@ -34,7 +34,7 @@ jobs:
     lint:
         runs-on: ubuntu-24.04
         steps:
-            - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
             - name: Install Rust toolchain
               run: rustup toolchain install stable --profile minimal --component rustfmt,clippy && rustup default stable
             - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -55,7 +55,7 @@ jobs:
     build:
         runs-on: ubuntu-24.04
         steps:
-            - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
             - name: Install Rust toolchain
               run: rustup toolchain install stable --profile minimal && rustup default stable
             - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -91,7 +91,7 @@ jobs:
                     - { runner: ubuntu-24.04-arm, arch: arm64, engine: { type: valkey, version: "7.2" } }
                     - { runner: ubuntu-24.04-arm, arch: arm64, engine: { type: redis, version: "7.2" } }
         steps:
-            - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
             # GitHub-hosted runners ship with ~14 GB free; reclaim ~25 GB of
             # preinstalled toolchains we never use so the debug test target
             # (+ engine build) can't exhaust the disk mid-compile.
@@ -154,7 +154,7 @@ jobs:
     coverage:
         runs-on: ubuntu-24.04
         steps:
-            - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
             - name: Install Rust toolchain
               run: rustup toolchain install stable --profile minimal --component llvm-tools-preview && rustup default stable
             - name: Install cargo-llvm-cov
@@ -184,7 +184,7 @@ jobs:
     deny:
         runs-on: ubuntu-24.04
         steps:
-            - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
             - name: Install Rust toolchain
               run: rustup toolchain install stable --profile minimal && rustup default stable
             # Cache the crates.io index/cache, the git-dependency clones
