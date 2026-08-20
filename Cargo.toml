@@ -37,10 +37,10 @@ path = "src/lib.rs"
 # When published, replace `git = ...` below with `version = "x.y"`. That also
 # unblocks publishing THIS crate to crates.io (git deps are disallowed there).
 # Tracking issue: <file against valkey-io/valkey-glide>.
-glide-core = { git = "https://github.com/valkey-io/valkey-glide", rev = "052ae4ef62b3ab055ce991d74ea27a5cf1762a20" }
+glide-core = { package = "experimental-glide-core-lib", version = "=2.5.1" }
 # The *same* vendored redis-rs fork glide-core uses — from the same repo+rev — so
 # that redis::Cmd / redis::Value unify with glide-core's expected types.
-redis = { git = "https://github.com/valkey-io/valkey-glide", package = "redis", rev = "052ae4ef62b3ab055ce991d74ea27a5cf1762a20", features = [
+redis = { package = "experimental-glide-core-rs-dependency", version = "=2.5.1", features = [
     "aio",
     "tokio-comp",
     "cluster",

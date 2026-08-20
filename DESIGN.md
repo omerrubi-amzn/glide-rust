@@ -7,8 +7,8 @@ license change), pinned to the same commit of the canonical
 `valkey-io/valkey-glide` repository:
 
 ```toml
-glide-core = { git = "https://github.com/valkey-io/valkey-glide", rev = "..." }
-redis      = { git = "https://github.com/valkey-io/valkey-glide", package = "redis", rev = "...", features = [
+glide-core = { package = "experimental-glide-core-lib", version = "=2.5.1" }
+redis      = { package = "experimental-glide-core-rs-dependency", version = "=2.5.1", features = [
     "aio", "tokio-comp", "cluster", "cluster-async",
 ] }
 ```
